@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# AstrBot runtime data generated beside the plugin during local execution.
+data/
+logs/
+tmp/
+temp/
+
+.env
+.venv/
+.idea/
+.vscode/
+*.log

@@ -1,0 +1,181 @@
+{
+  "enabled": {
+    "description": "启用情绪与亲密状态插件",
+    "type": "bool",
+    "default": true
+  },
+  "max_injected_events": {
+    "description": "最多注入的当前事情数量",
+    "hint": "正面和负面事情共用额度，建议设置为 2 或 3。",
+    "type": "int",
+    "slider": {"min": 1, "max": 3, "step": 1},
+    "default": 2
+  },
+  "max_injected_attention_items": {
+    "description": "最多注入模型提示词的待关注事项数量",
+    "hint": "只限制模型提示词注入数量，不限制后台账本和诊断展示；设置为 0 可完全关闭待关注事项注入。",
+    "type": "int",
+    "slider": {"min": 0, "max": 4, "step": 1},
+    "default": 2
+  },
+  "max_active_episodic_events": {
+    "description": "最多保留的近期心事数量（未归档）",
+    "hint": "近期片段和短时情绪共用此额度；超过后按优先级归档，历史记录仍会保留。",
+    "type": "int",
+    "slider": {"min": 3, "max": 12, "step": 1},
+    "default": 6
+  },
+  "max_active_psychological_events": {
+    "description": "最多保留的长期心事数量（未归档）",
+    "hint": "长期具体心事和心理余波共用此额度；active、candidate、easing、dormant 等未归档状态都会计数，超过后按优先级归档并保留历史。",
+    "type": "int",
+    "slider": {"min": 1, "max": 12, "step": 1},
+    "default": 6
+  },
+  "max_open_attention_items": {
+    "description": "最多保留的未终结待关注事项数量",
+    "hint": "只限制 proposed/open 事项；完成、取消、替代和容量归档都会保留历史记录，不会因逾期或沉默自动判定完成。",
+    "type": "int",
+    "slider": {"min": 1, "max": 20, "step": 1},
+    "default": 8
+  },
+  "decay_half_life_hours": {
+    "description": "心事自然淡化半衰期（小时）",
+    "type": "float",
+    "default": 72.0
+  },
+  "proactive_silence_enabled": {
+    "description": "主动消息长期未回应影响情绪",
+    "hint": "与灵犀主动对话 Spark 协作。只有 AI 确实成功发送主动消息，且用户超过阈值仍未回复时，才产生有上限的轻度负面影响；普通长时间没聊天不会触发。",
+    "type": "bool",
+    "default": true
+  },
+  "proactive_silence_threshold_minutes": {
+    "description": "主动消息未回应阶段间隔（分钟）",
+    "hint": "等待达到该时长后进入第一阶段；继续每经过一个相同间隔最多加深一阶段。建议不要低于 60 分钟。",
+    "type": "float",
+    "default": 180.0
+  },
+  "proactive_silence_max_stages": {
+    "description": "单条主动消息最多结算阶段",
+    "type": "int",
+    "slider": {"min": 1, "max": 5, "step": 1},
+    "default": 3
+  },
+  "proactive_silence_max_intensity": {
+    "description": "主动未回应事件最大强度",
+    "hint": "限制这类事件对整体心境的影响，避免一次未及时回复永久主导关系状态。",
+    "type": "float",
+    "slider": {"min": 0.1, "max": 0.8, "step": 0.05},
+    "default": 0.55
+  },
+  "review_provider_ids": {
+    "description": "低频消息复核模型链",
+    "hint": "只用于异步复核本地规则不够确定的用户私聊，适合选择速度快、成本较低的模型。按从上到下顺序失败回退；留空时使用当前会话模型。",
+    "type": "list",
+    "items": {"type": "string"},
+    "_special": "select_providers",
+    "default": []
+  },
+  "daily_provider_ids": {
+    "description": "每日深度回顾模型链",
+    "hint": "用于每日回顾、日记、事件复盘和次日心境建议，适合选择推理能力更强的模型。按从上到下顺序失败回退；留空时使用当前会话模型。最终心境仍由本地确定性结算器裁决。",
+    "type": "list",
+    "items": {"type": "string"},
+    "_special": "select_providers",
+    "default": []
+  },
+  "model_review_enabled": {
+    "description": "启用低频模型复核",
+    "hint": "本地规则先处理用户私聊；仅在候选不够确定时异步调用低频消息复核模型链，不阻塞当前回复。关闭后本地识别和结算仍正常工作。",
+    "type": "bool",
+    "default": false
+  },
+  "custom_rules": {
+    "description": "自定义本地规则（可留空）",
+    "hint": "不必填写：留空仍使用内置的正向、负向、道歉安慰、亲近、玩笑和攻击规则。需要角色专属词时再添加对象；支持 id、enabled、priority、match_type、words/pattern、exclude_words、action、target、valence、intensity、confidence、meaning，完整示例见插件 README。规则只产生证据，不直接覆盖最终状态。",
+    "type": "list",
+    "items": {"type": "object"},
+    "default": []
+  },
+  "intimacy_enabled": {
+    "description": "启用独立身体反应状态",
+    "hint": "单独追踪身体敏感度和性唤起，不等于普通好感或开心，也不占心事数量。只根据用户发来的相关私聊变化，普通情绪激动不会算作性唤起。",
+    "type": "bool",
+    "default": false
+  },
+  "persona_intimacy_tier": {
+    "description": "默认人设亲密档位",
+    "hint": "固定的人设亲密基线，不随聊天或时间变化。档位越高，相同亲密互动引起身体敏感和性唤起的增幅越大；身体反应本身仍会随时间回落。",
+    "type": "string",
+    "options": ["普通亲密", "很亲密", "非常亲密", "对你有很强的身体吸引"],
+    "default": "很亲密"
+  },
+  "intimacy_keywords": {
+    "description": "用户亲密互动规则词",
+    "hint": "只扫描用户发来的私聊消息，不扫描 AI 回复。命中只是一次有上限的身体反应证据，会小幅调整身体敏感和性唤起，并随时间回落。",
+    "type": "list",
+    "items": {"type": "string"},
+    "default": ["亲一下", "抱一下", "想你", "喜欢你"]
+  },
+  "intimacy_decay_half_life_hours": {
+    "description": "身体反应自然回落半衰期（小时）",
+    "type": "float",
+    "default": 8.0
+  },
+  "daily_settlement_enabled": {
+    "description": "启用每日自动结算",
+    "hint": "到设定日界线后，关闭刚结束的逻辑日并生成新一天的起始心境。即使关闭模型日记，仍会执行本地确定性结算和本地回顾。",
+    "type": "bool",
+    "default": false
+  },
+  "daily_settlement_time": {
+    "description": "每日逻辑日界线",
+    "hint": "24 小时制 HH:MM，例如 07:00。到点后结算刚结束的周期，而不是提前结算当日；结算结果作为新逻辑日的起始心境。",
+    "type": "string",
+    "default": "07:00"
+  },
+  "diary_enabled": {
+    "description": "启用模型每日回顾与日记",
+    "hint": "每日结算时使用每日深度回顾模型链生成日记、摘要、事件观察和次日心境建议。关闭或调用失败时改用本地回顾，不会关闭每日确定性结算。模型心境仅是低权重建议。",
+    "type": "bool",
+    "default": true
+  },
+  "diary_style_hint": {
+    "description": "日记人格与文风补充（可留空）",
+    "hint": "只补充角色已有的人格表达方式和文风，不是完整提示词；不会覆盖第一人称、事实边界、JSON 字段和确定性状态规则。建议填写简短描述，例如：语气克制、偶尔嘴硬、句子偏短。",
+    "type": "string",
+    "max_length": 300,
+    "default": ""
+  },
+  "diary_max_chars": {
+    "description": "日记最大字数",
+    "type": "int",
+    "slider": {"min": 100, "max": 2000, "step": 50},
+    "default": 600
+  },
+  "diary_input_max_chars": {
+    "description": "每日回顾模型输入字符上限",
+    "type": "int",
+    "slider": {"min": 500, "max": 10000, "step": 500},
+    "default": 4000
+  },
+  "diary_tail_messages": {
+    "description": "每日回顾最多读取的未总结尾部消息数",
+    "type": "int",
+    "slider": {"min": 0, "max": 30, "step": 1},
+    "default": 12
+  },
+  "diary_retention_days": {
+    "description": "日记保留天数",
+    "type": "int",
+    "slider": {"min": 7, "max": 365, "step": 1},
+    "default": 90
+  },
+  "daily_mood_palette": {
+    "description": "每日低权重心境词",
+    "hint": "仅作为日记模型的弱参考，不能编造经历，也不会直接覆盖权威心境。",
+    "type": "list",
+    "default": ["平静", "轻快", "慵懒", "专注", "温柔", "内敛"]
+  }
+}

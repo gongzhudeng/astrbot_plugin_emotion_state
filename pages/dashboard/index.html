@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>内心世界</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">EMOTION STATE</p>
+      <h1>内心世界</h1>
+    </div>
+    <div class="session-control">
+      <label for="session-id">私聊会话</label>
+      <select id="session-id" aria-label="私聊会话"></select>
+      <button id="load" type="button">刷新</button>
+    </div>
+  </header>
+
+  <main id="workspace" class="workspace" hidden>
+    <section class="mood-band">
+      <div class="mood-orbit" aria-label="当前心境">
+        <div class="mood-core">
+          <span>当前心境</span>
+          <strong id="mood-label">平静</strong>
+        </div>
+        <div id="event-orbits" class="event-orbits"></div>
+      </div>
+      <div class="metrics" id="mood-metrics"></div>
+    </section>
+
+    <p id="action-status" class="action-status" role="status" aria-live="polite" hidden></p>
+    <section class="content-grid">
+      <div class="panel span-two">
+        <div class="section-heading"><h2>心里的事情</h2><span id="event-count"></span></div>
+        <div id="events" class="event-list"></div>
+      </div>
+      <div class="panel span-two">
+        <div class="section-heading"><h2>待关注事项</h2><span id="attention-count"></span></div>
+        <div id="attention-items" class="event-list"></div>
+      </div>
+      <div class="panel">
+        <div class="section-heading"><h2>身体反应</h2><span id="intimacy-stage"></span></div>
+        <p class="intimacy-baseline">人设亲密基线 <strong id="intimacy-tier"></strong></p>
+        <p class="status-line">以下连续数值仅供后台诊断，不会注入模型提示词。</p>
+        <div id="intimacy" class="dimension-list"></div>
+      </div>
+      <div class="panel span-two diary-panel">
+        <div class="section-heading"><h2>每日回顾</h2><span id="diary-count"></span></div>
+        <div class="diary-toolbar">
+          <input id="diary-search" type="search" placeholder="搜索回顾内容" aria-label="搜索每日回顾">
+          <select id="diary-month" aria-label="按月份筛选每日回顾">
+            <option value="">全部月份</option>
+          </select>
+        </div>
+        <div class="diary-browser">
+          <div id="diaries" class="diary-list" role="list"></div>
+          <article id="diary-detail" class="diary-detail"></article>
+        </div>
+        <div class="diary-pagination">
+          <button id="diary-prev" type="button">上一页</button>
+          <span id="diary-page" class="status-line"></span>
+          <button id="diary-next" type="button">下一页</button>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="section-heading"><h2>集成诊断</h2></div>
+        <dl id="diagnostics" class="diagnostics"></dl>
+      </div>
+      <div class="panel span-two">
+        <div class="section-heading">
+          <h2>情绪注入诊断</h2>
+          <button id="refresh-prompt" type="button">刷新</button>
+        </div>
+        <div class="injection-grid">
+          <section class="injection-view">
+            <h3>最近一次模型请求的历史快照（已实际注入）</h3>
+            <p id="prompt-kind" class="status-line"></p>
+            <pre id="prompt"></pre>
+          </section>
+          <section class="injection-view">
+            <h3>当前账本实时预览（尚未发送）</h3>
+            <p id="preview-kind" class="status-line"></p>
+            <pre id="preview-prompt"></pre>
+          </section>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="section-heading"><h2>规则试跑</h2></div>
+        <textarea id="rule-sample" rows="5" placeholder="输入一条私聊样例"></textarea>
+        <button id="run-rule" type="button">试跑</button>
+        <pre id="rule-output"></pre>
+      </div>
+    </section>
+  </main>
+
+  <div id="empty" class="empty-state">正在载入私聊状态</div>
+
+  <div id="delete-confirm" class="confirm-overlay" hidden>
+    <section class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-confirm-title" aria-describedby="delete-confirm-message">
+      <h2 id="delete-confirm-title">确认删除</h2>
+      <p id="delete-confirm-message"></p>
+      <div class="confirm-actions">
+        <button id="delete-cancel" type="button">取消</button>
+        <button id="delete-apply" class="danger-button" type="button">删除</button>
+      </div>
+    </section>
+  </div>
+
+  <script src="/api/plugin/page/bridge-sdk.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>

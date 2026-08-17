@@ -4,6 +4,13 @@
     "type": "bool",
     "default": true
   },
+  "emotion_view_theme": {
+    "description": "情绪查看图片主题",
+    "hint": "自动模式会在本地时间 07:00 至 19:00 使用亮色，其余时间使用暗色。",
+    "type": "string",
+    "options": ["自动", "亮色", "暗色"],
+    "default": "自动"
+  },
   "max_injected_events": {
     "description": "最多注入的当前事情数量",
     "hint": "正面和负面事情共用额度，建议设置为 2 或 3。",

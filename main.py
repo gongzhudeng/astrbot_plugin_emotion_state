@@ -15,7 +15,7 @@ from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.event.filter import EventMessageType
 from astrbot.api.star import Context, Star, StarTools, register
-from astrbot.core.message.components import Plain, Reply
+from astrbot.core.message.components import Image, Plain, Reply
 from astrbot.core.provider.entities import ProviderRequest
 
 from .core.attention import (
@@ -31,6 +31,7 @@ from .core.daily import (
     parse_boundary,
     parse_daily_response,
 )
+from .core.image_renderer import EmotionStateImageRenderer
 from .core.injector import (
     InjectionSnapshot,
     build_injection_content,
@@ -77,7 +78,7 @@ PLUGIN_NAME = "astrbot_plugin_emotion_state"
     PLUGIN_NAME,
     "灵犀 · 内心世界",
     "私聊专用的连续情绪、心事、每日回顾与亲密状态系统。",
-    "v0.1.4",
+    "v0.1.5",
     "https://github.com/gongzhudeng/astrbot_plugin_emotion_state",
 )
 class EmotionStatePlugin(Star):
@@ -98,6 +99,7 @@ class EmotionStatePlugin(Star):
         )
         self.rules = LocalRuleEngine(self._list_config("custom_rules"))
         self.gateway = ProviderGateway(context, config)
+        self.image_renderer = EmotionStateImageRenderer(Path(__file__).resolve().parent)
         self._last_injected_prompt: dict[str, str] = {}
         self._last_injection_snapshot: dict[str, InjectionSnapshot] = {}
         self._review_tasks: set[asyncio.Task[Any]] = set()
@@ -1136,6 +1138,35 @@ class EmotionStatePlugin(Star):
         ledger = await self.service.get(self._user_key(event))
         return self._format_state(ledger)
 
+    async def _emotion_view_png(self, event: AstrMessageEvent) -> bytes | None:
+        if not self._is_private(event):
+            return None
+        ledger = await self.service.get(self._user_key(event))
+        events = select_injected_events(
+            ledger.events, self._int_config("max_injected_events", 2)
+        )
+        attention_items = select_attention_items(
+            ledger.attention_items,
+            self._attention_injection_limit(),
+            include_proposed=False,
+        )
+        stage = body_reaction_stage(
+            ledger.intimacy.body_sensitivity,
+            ledger.intimacy.sexual_arousal,
+        )
+        renderer = getattr(self, "image_renderer", None)
+        if renderer is None:
+            renderer = EmotionStateImageRenderer(Path(__file__).resolve().parent)
+        return await asyncio.to_thread(
+            renderer.render,
+            ledger,
+            events,
+            attention_items,
+            intimacy_stage_label(stage),
+            datetime.now().astimezone(),
+            self._config("emotion_view_theme", "自动"),
+        )
+
     async def _settle_text(self, event: AstrMessageEvent) -> str | None:
         if not self._is_private(event):
             return None
@@ -1246,6 +1277,16 @@ class EmotionStatePlugin(Star):
         if result is not None:
             yield event.plain_result(result)
 
+    @emotion_group.command("查看", alias={"view"})
+    async def group_emotion_view(self, event: AstrMessageEvent):
+        try:
+            png = await self._emotion_view_png(event)
+            if png is not None:
+                yield event.chain_result([Image.fromBytes(png)])
+        except Exception as exc:  # noqa: BLE001
+            logger.error("[EmotionState] emotion view render failed: %s", exc)
+            yield event.plain_result("情绪图片生成失败，请稍后重试。")
+
     @filter.command(
         "情绪状态",
         alias={"心境", "emotion state"},
@@ -1255,6 +1296,20 @@ class EmotionStatePlugin(Star):
         result = await self._state_text(event)
         if result is not None:
             yield event.plain_result(result)
+
+    @filter.command(
+        "情绪查看",
+        alias={"emotion view"},
+        desc="以本地渲染图片查看当前情绪、身体反应、心事和待关注事项。",
+    )
+    async def cmd_emotion_view(self, event: AstrMessageEvent):
+        try:
+            png = await self._emotion_view_png(event)
+            if png is not None:
+                yield event.chain_result([Image.fromBytes(png)])
+        except Exception as exc:  # noqa: BLE001
+            logger.error("[EmotionState] emotion view render failed: %s", exc)
+            yield event.plain_result("情绪图片生成失败，请稍后重试。")
 
     @emotion_group.command("清理瞬时", alias={"cleanup-transient"})
     async def group_cleanup_transient(self, event: AstrMessageEvent, mode: str = ""):

@@ -7,6 +7,12 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 from uuid import uuid4
 
+from .text_limits import (
+    EVENT_FACT_REVIEW_CHARS,
+    EVENT_FACT_STORAGE_CHARS,
+    bound_complete_text,
+)
+
 Lifecycle = Literal[
     "candidate", "active", "intensified", "easing", "dormant", "archived"
 ]
@@ -94,7 +100,7 @@ class InnerEvent:
     traces: list[EventTrace] = field(default_factory=list)
 
     def __post_init__(self) -> None:
-        self.fact = self.fact.strip()
+        self.fact = bound_complete_text(self.fact, EVENT_FACT_STORAGE_CHARS)
         self.emotional_meaning = self.emotional_meaning.strip()
         self.target = str(self.target or "unknown").strip()[:80] or "unknown"
         self.target_basis = str(self.target_basis or "").strip()[:120]
@@ -158,7 +164,7 @@ class InnerEvent:
             "event_id": self.id,
             "event_version": self.version,
             "category": self.category,
-            "fact": self.fact[:160],
+            "fact": bound_complete_text(self.fact, EVENT_FACT_REVIEW_CHARS),
             "emotional_meaning": self.emotional_meaning[:160],
             "target": self.target,
             "target_basis": self.target_basis,
@@ -515,7 +521,7 @@ class EventObservation:
 
     def __post_init__(self) -> None:
         self.action = str(self.action or "").strip().lower()
-        self.fact = str(self.fact or "").strip()[:240]
+        self.fact = bound_complete_text(self.fact, EVENT_FACT_STORAGE_CHARS)
         self.emotional_meaning = str(self.emotional_meaning or "").strip()[:240]
         self.target = str(self.target or "unknown").strip()[:80] or "unknown"
         self.target_basis = str(self.target_basis or "").strip()[:120]

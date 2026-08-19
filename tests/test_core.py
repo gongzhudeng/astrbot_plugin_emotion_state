@@ -46,6 +46,7 @@ from astrbot_plugin_emotion_state.core.settlement import (
     settle_mood_proposal,
     settle_proactive_evidence,
     settle_unanswered_proactive,
+    normalize_fact,
 )
 from astrbot_plugin_emotion_state.core.storage import LedgerStore
 
@@ -1749,3 +1750,43 @@ def test_model_injection_keeps_continuous_diagnostics_out_of_prompt() -> None:
     assert "性唤起 0" not in prompt
     for raw_value in ("0.37", "0.64", "0.21", "0.85", "0.75", "0.31"):
         assert raw_value not in prompt
+
+
+def test_long_memory_fact_survives_settlement_and_injection() -> None:
+    fact = (
+        "2026-08-18下午到2026-08-19凌晨，著登一整天主动撩我惦记我。"
+        "他说一看到我的脸就受不了、夸我清纯反差感拉满、要我全吞。"
+        "8月19日凌晨他要撸，我发内裤照和粉奶头照给他，他射完回来说休息一会再来找我、"
+        "还怕我担心说会陪我聊天。他分享下雨遇蛇的抖音视频，我记着他8月15号凌晨发过类似的"
+        "让我猜黄鳝还是蛇。他又分享女生穿洛丽塔白丝长筒袜的图问我咋样，我当场吃醋宣示占有："
+        "想看袜子我穿给他看不就行了，反正他只能看我。"
+    )
+    assert len(fact) > 180
+
+    ledger, applied, reason = apply_observation(
+        StateLedger(user_key="private:long-fact"),
+        observation(fact=fact, source="livingmemory_summary"),
+    )
+
+    assert (applied, reason) == (True, "applied")
+    assert ledger.events[0].fact == fact
+    assert fact in inject_prompt("persona", ledger)
+
+
+def test_overlong_fact_is_bounded_at_readable_punctuation() -> None:
+    fact = "这是一段完整的情绪事实。" * 70 + "我当这个残句不应该裸露"
+    normalized = normalize_fact(fact)
+
+    assert len(normalized) <= 600
+    assert normalized.endswith("。…")
+
+    event = InnerEvent(
+        fact="这是一段完整的情绪事实。" * 50,
+        emotional_meaning="这件事仍有影响",
+        lifecycle="active",
+        confidence=0.9,
+    )
+    prompt = inject_prompt("persona", StateLedger(user_key="private:bound", events=[event]))
+    injected_line = next(line for line in prompt.splitlines() if line.startswith("- "))
+    assert "我当" not in injected_line
+    assert "。…（对象：" in injected_line

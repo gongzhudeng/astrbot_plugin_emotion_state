@@ -70,6 +70,7 @@ from .core.settlement import (
     settle_unanswered_proactive,
 )
 from .core.storage import LedgerStore
+from .core.text_limits import EVENT_FACT_STORAGE_CHARS, bound_complete_text
 
 PLUGIN_NAME = "astrbot_plugin_emotion_state"
 
@@ -78,7 +79,7 @@ PLUGIN_NAME = "astrbot_plugin_emotion_state"
     PLUGIN_NAME,
     "灵犀 · 内心世界",
     "私聊专用的连续情绪、心事、每日回顾与亲密状态系统。",
-    "v0.1.5",
+    "v0.1.6",
     "https://github.com/gongzhudeng/astrbot_plugin_emotion_state",
 )
 class EmotionStatePlugin(Star):
@@ -655,7 +656,9 @@ class EmotionStatePlugin(Star):
                             action=action,
                             event_id=event_id,
                             event_version=event_version,
-                            fact=str(raw.get("fact", ""))[:240],
+                            fact=bound_complete_text(
+                                str(raw.get("fact", "")), EVENT_FACT_STORAGE_CHARS
+                            ),
                             emotional_meaning=str(
                                 raw.get(
                                     "emotional_meaning",
@@ -762,7 +765,9 @@ class EmotionStatePlugin(Star):
                         return
                     observation = EventObservation(
                         action=str(item.get("action", "create")),
-                        fact=str(item.get("fact") or text[:240]),
+                        fact=bound_complete_text(
+                            str(item.get("fact") or text), EVENT_FACT_STORAGE_CHARS
+                        ),
                         emotional_meaning=str(
                             item.get("emotional_meaning") or "待复核的互动影响"
                         ),
@@ -979,7 +984,9 @@ class EmotionStatePlugin(Star):
                 try:
                     observation = EventObservation(
                         action=str(raw.get("action", "create")),
-                        fact=str(raw.get("fact", ""))[:240],
+                        fact=bound_complete_text(
+                            str(raw.get("fact", "")), EVENT_FACT_STORAGE_CHARS
+                        ),
                         emotional_meaning=str(
                             raw.get("emotional_meaning", "每日回顾发现的持续影响")
                         )[:240],

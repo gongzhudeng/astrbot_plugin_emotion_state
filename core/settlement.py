@@ -20,6 +20,7 @@ from .models import (
     parse_time,
     utc_now,
 )
+from .text_limits import EVENT_FACT_STORAGE_CHARS, bound_complete_text
 
 LIFECYCLE_WEIGHT = {
     "candidate": 0.45,
@@ -692,7 +693,7 @@ def is_media_only_fact(fact: str) -> bool:
     return not re.sub(r"[\W_]+", "", clean, flags=re.UNICODE)
 
 
-def normalize_fact(fact: str, max_chars: int = 180) -> str:
+def normalize_fact(fact: str, max_chars: int = EVENT_FACT_STORAGE_CHARS) -> str:
     clean = strip_media_context(fact)
     clean = re.sub(
         r"(?:\[聊天合并[^\]]*\]|<!--.*?-->)",
@@ -700,7 +701,8 @@ def normalize_fact(fact: str, max_chars: int = 180) -> str:
         clean,
         flags=re.DOTALL,
     )
-    return re.sub(r"\s+", " ", clean).strip()[: max(40, int(max_chars))]
+    clean = re.sub(r"\s+", " ", clean).strip()
+    return bound_complete_text(clean, max(40, int(max_chars)))
 
 
 def select_injected_events_with_reasons(

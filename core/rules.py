@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from .models import EventObservation
+from .text_limits import EVENT_FACT_STORAGE_CHARS, bound_complete_text
 from .settlement import infer_attack_target, strip_media_context
 
 DEFAULT_RULES: list[dict[str, Any]] = [
@@ -204,7 +205,7 @@ class LocalRuleEngine:
                     category = "transient"
             observation = EventObservation(
                 action=str(rule.get("action", "create")),
-                fact=semantic_text[:240],
+                fact=bound_complete_text(semantic_text, EVENT_FACT_STORAGE_CHARS),
                 emotional_meaning=str(
                     rule.get("meaning") or "这段互动可能影响当前心境"
                 ),

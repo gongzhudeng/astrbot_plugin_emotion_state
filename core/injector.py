@@ -13,6 +13,7 @@ from .attention import (
 from .models import StateLedger, iso_now
 from .presentation import intimacy_prompt_text
 from .settlement import normalize_fact, select_injected_events
+from .text_limits import EVENT_FACT_INJECTION_CHARS
 
 ANCHOR = "<!-- EMOTION_STATE_ANCHOR -->"
 BLOCK_START = "<!-- EMOTION_STATE_BEGIN -->"
@@ -113,7 +114,7 @@ def build_snapshot(
     if selected:
         lines.append("当前仍有影响的事情：")
         for event in selected:
-            fact = normalize_fact(event.fact)
+            fact = normalize_fact(event.fact, EVENT_FACT_INJECTION_CHARS)
             meaning = normalize_fact(event.emotional_meaning, 140)
             target_label = {
                 "user": "当前聊天对象",

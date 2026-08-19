@@ -5,6 +5,7 @@ import vm from "node:vm";
 
 const dashboardDir = new URL("../pages/dashboard/", import.meta.url);
 const appSource = readFileSync(new URL("app.js", dashboardDir), "utf8");
+const stylesSource = readFileSync(new URL("styles.css", dashboardDir), "utf8");
 const elementIds = [
   "workspace",
   "empty",
@@ -114,6 +115,17 @@ async function settle() {
 function run(context, source) {
   return vm.runInContext(source, context);
 }
+
+test("long event rows keep their status controls inside the panel", () => {
+  assert.match(
+    stylesSource,
+    /\.event-item\s*\{[^}]*grid-template-columns:\s*9px\s+minmax\(0,\s*1fr\)\s+minmax\(82px,\s*96px\)/s,
+  );
+  assert.match(stylesSource, /\.event-item\s*>\s*div\s*\{[^}]*min-width:\s*0/s);
+  assert.match(stylesSource, /\.event-item strong\s*\{[^}]*overflow-wrap:\s*anywhere/s);
+  assert.match(stylesSource, /\.event-state\s*\{[^}]*min-width:\s*0/s);
+  assert.match(stylesSource, /\.delete-item\s*\{[^}]*white-space:\s*nowrap/s);
+});
 
 test("daily review browser handles loading, filtering, and pagination", async () => {
   const elements = Object.fromEntries(elementIds.map((id) => [id, createElement(id)]));

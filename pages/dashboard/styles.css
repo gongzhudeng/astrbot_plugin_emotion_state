@@ -51,14 +51,15 @@ h2 { font-size: 15px; font-weight: 600; }
 .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-bottom: 13px; border-bottom: 1px solid var(--line); }
 .section-heading span { color: var(--muted); font-size: 12px; }
 .event-list, .dimension-list { display: grid; gap: 9px; padding-top: 12px; }
-.event-item { display: grid; grid-template-columns: 9px 1fr auto; gap: 10px; align-items: start; padding: 9px 0; border-bottom: 1px solid #293647; }
+.event-item { display: grid; grid-template-columns: 9px minmax(0, 1fr) minmax(82px, 96px); gap: 10px; align-items: start; padding: 9px 0; border-bottom: 1px solid #293647; }
 .event-item:last-child { border-bottom: 0; }
 .event-marker { width: 7px; height: 7px; margin-top: 6px; border-radius: 50%; background: var(--warm); }
-.event-item strong { display: block; font-size: 13px; font-weight: 500; }
+.event-item > div { min-width: 0; }
+.event-item strong { display: block; min-width: 0; font-size: 13px; font-weight: 500; line-height: 1.55; overflow-wrap: anywhere; word-break: break-word; }
 .event-item p, .diary-item p { margin-top: 4px; color: var(--muted); font-size: 12px; line-height: 1.55; }
-.event-state { display: grid; gap: 3px; color: var(--muted); font: 11px ui-monospace, monospace; text-align: right; }
+.event-state { display: grid; min-width: 0; gap: 3px; justify-items: end; color: var(--muted); font: 11px ui-monospace, monospace; text-align: right; overflow-wrap: anywhere; }
 .event-state b { color: var(--warm); font: 500 11px/1.2 Inter, ui-sans-serif, system-ui, sans-serif; }
-.delete-item { padding: 4px 7px; color: var(--danger); font-size: 11px; }
+.delete-item { max-width: 100%; padding: 4px 7px; color: var(--danger); font-size: 11px; white-space: nowrap; }
 .action-status { position: fixed; z-index: 10; right: 22px; bottom: 22px; max-width: min(420px, calc(100vw - 44px)); margin: 0; padding: 9px 11px; border: 1px solid var(--line); background: var(--surface-strong); color: var(--accent); font-size: 12px; box-shadow: 0 8px 24px #0006; }
 .action-status.error { color: var(--danger); }
 .intimacy-baseline { display: flex; justify-content: space-between; gap: 12px; padding-top: 13px; color: var(--muted); font-size: 12px; }

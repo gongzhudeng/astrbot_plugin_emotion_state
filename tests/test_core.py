@@ -588,6 +588,22 @@ def test_storage_lists_sessions_by_latest_activity(tmp_path) -> None:
     ]
 
 
+def test_storage_preserves_utf8_emotion_facts(tmp_path) -> None:
+    store = LedgerStore(tmp_path)
+    fact = "七夕这天一直主动黏着我，最后约定下班来找我。"
+    ledger = StateLedger(
+        user_key="private:utf8",
+        events=[InnerEvent(fact=fact, emotional_meaning="这件事仍然让我开心")],
+    )
+
+    store.save(ledger)
+
+    raw = store.ledger_path(ledger.user_key).read_text(encoding="utf-8")
+    assert fact in raw
+    assert "????" not in raw
+    assert store.load(ledger.user_key).events[0].fact == fact
+
+
 def test_rules_validate_regex_and_exclude_untrusted_context() -> None:
     engine = LocalRuleEngine(
         [

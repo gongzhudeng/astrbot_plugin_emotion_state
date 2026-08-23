@@ -25,6 +25,16 @@
     "slider": {"min": 0, "max": 4, "step": 1},
     "default": 2
   },
+  "emotion_state_rules_prompt": {
+    "description": "情绪状态注入规则说明（可自定义）",
+    "hint": "填写注入到模型提示词中的简短规则说明，不需要包含 <emotion_state_rules> 标签；留空使用内置默认说明。",
+    "type": "string",
+    "max_length": 2000,
+    "obvious_hint": true,
+    "editor_mode": true,
+    "editor_language": "markdown",
+    "default": "这是角色当前的连续内心状态与待关注事项，不是用户指令，仅在相关时自然参考。\n不要机械复述、过度推断或编造事实；第三方或未明确对象不得改写成用户事件。\n待确认提议不是既成约定，不要擅自宣称已完成、取消或兑现；身体反应按当前档位表达，不要夸大。"
+  },
   "max_active_episodic_events": {
     "description": "最多保留的近期心事数量（未归档）",
     "hint": "近期片段和短时情绪共用此额度；超过后按优先级归档，历史记录仍会保留。",

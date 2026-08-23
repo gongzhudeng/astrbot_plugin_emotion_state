@@ -6,10 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 from astrbot_plugin_busy_schedule.core.generator import ScheduleGenerator
-from astrbot_plugin_busy_schedule.main import (
-    _position_emotion_anchor,
-    _replace_prompt_block,
-)
+from astrbot_plugin_busy_schedule.main import _rebuild_system_prompt
 from astrbot_plugin_emotion_state.core.daily import (
     build_daily_prompt,
     parse_daily_response,
@@ -44,18 +41,12 @@ CUSTOM_END = "<!-- /BUSY_SCHEDULE_CUSTOM -->"
 
 
 def busy_inject(prompt: str) -> str:
-    prompt = _replace_prompt_block(
+    return _rebuild_system_prompt(
         prompt,
-        CACHE_START,
-        CACHE_END,
-        "<character_static>今日穿搭、天气、完整日程</character_static>",
-    )
-    prompt = _position_emotion_anchor(prompt, CACHE_END)
-    return _replace_prompt_block(
-        prompt,
-        CUSTOM_START,
-        CUSTOM_END,
-        "<character_custom>自定义动态内容</character_custom>",
+        {
+            "daily": "<character_static>今日穿搭、天气、完整日程</character_static>",
+            "custom": "<character_custom>自定义动态内容</character_custom>",
+        },
     )
 
 
@@ -63,10 +54,11 @@ def assert_final_prompt_order(prompt: str) -> None:
     positions = [
         prompt.index(CACHE_START),
         prompt.index(CACHE_END),
+        prompt.index(CUSTOM_START),
+        prompt.index(CUSTOM_END),
         prompt.index(ANCHOR),
         prompt.index(BLOCK_START),
         prompt.index(BLOCK_END),
-        prompt.index(CUSTOM_START),
     ]
     assert positions == sorted(positions)
     assert prompt.count(ANCHOR) == 1

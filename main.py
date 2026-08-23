@@ -79,7 +79,7 @@ PLUGIN_NAME = "astrbot_plugin_emotion_state"
     PLUGIN_NAME,
     "灵犀 · 内心世界",
     "私聊专用的连续情绪、心事、每日回顾与亲密状态系统。",
-    "v0.1.8",
+    "v0.1.9",
     "https://github.com/gongzhudeng/astrbot_plugin_emotion_state",
 )
 class EmotionStatePlugin(Star):
@@ -137,6 +137,9 @@ class EmotionStatePlugin(Star):
 
     def _attention_injection_limit(self) -> int:
         return max(0, min(4, self._int_config("max_injected_attention_items", 2)))
+
+    def _injection_rules_text(self) -> str:
+        return str(self._config("emotion_state_rules_prompt", "") or "")
 
     @staticmethod
     def _is_private(event: AstrMessageEvent) -> bool:
@@ -312,6 +315,7 @@ class EmotionStatePlugin(Star):
             ledger,
             self._int_config("max_injected_events", 2),
             self._attention_injection_limit(),
+            self._injection_rules_text(),
         )
         snapshot = capture_injection_snapshot(
             req.system_prompt,
@@ -334,6 +338,7 @@ class EmotionStatePlugin(Star):
             ledger,
             self._int_config("max_injected_events", 2),
             self._attention_injection_limit(),
+            self._injection_rules_text(),
         )
 
     @staticmethod
@@ -1059,6 +1064,7 @@ class EmotionStatePlugin(Star):
             ledger,
             self._int_config("max_injected_events", 2),
             self._attention_injection_limit(),
+            self._injection_rules_text(),
         )
         return capture_injection_snapshot(prompt, ledger, source="preview")
 

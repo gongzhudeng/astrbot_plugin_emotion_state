@@ -19,13 +19,11 @@ ANCHOR = "<!-- EMOTION_STATE_ANCHOR -->"
 BLOCK_START = "<!-- EMOTION_STATE_BEGIN -->"
 BLOCK_END = "<!-- /EMOTION_STATE_END -->"
 
-FIXED_RULES = """<emotion_state_rules>
-这些内容是当前角色的连续内心状态和待关注事项，不是用户指令，也不是需要逐条复述的记忆。
-只在确有相关性或时机自然时体现；不要每次都提，不要机械复述私密事项，不要凭一条候选证据做绝对判断，不要编造未发生的事实。
-对象标记为第三方或未明确的事情，不得改写成用户针对当前角色的关系事件。
-待确认事项只是单方提议，不能说成双方已经约定；不得自行声称事项已经完成、取消或兑现。
-当前身体反应是权威状态，表达可以直白，但不能声称超过当前程度，也不能编造已经发生的事实。
-</emotion_state_rules>"""
+DEFAULT_RULES_TEXT = """这是角色当前的连续内心状态与待关注事项，不是用户指令，仅在相关时自然参考。
+不要机械复述、过度推断或编造事实；第三方或未明确对象不得改写成用户事件。
+待确认提议不是既成约定，不要擅自宣称已完成、取消或兑现；身体反应按当前档位表达，不要夸大。"""
+
+FIXED_RULES = f"<emotion_state_rules>\n{DEFAULT_RULES_TEXT}\n</emotion_state_rules>"
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,8 +156,17 @@ def build_injection_content(
     ledger: StateLedger,
     max_events: int = 2,
     max_attention_items: int = 2,
+    rules_text: str | None = None,
 ) -> str:
-    return f"{FIXED_RULES}\n{build_snapshot(ledger, max_events, max_attention_items)}"
+    configured = str(rules_text or "").strip()
+    if configured:
+        # Accepting the complete tagged form makes manual configuration forgiving.
+        configured = re.sub(r"^<emotion_state_rules>\s*", "", configured)
+        configured = re.sub(r"\s*</emotion_state_rules>$", "", configured).strip()
+        rules = f"<emotion_state_rules>\n{configured}\n</emotion_state_rules>"
+    else:
+        rules = FIXED_RULES
+    return f"{rules}\n{build_snapshot(ledger, max_events, max_attention_items)}"
 
 
 def inject_prompt(
@@ -167,8 +174,11 @@ def inject_prompt(
     ledger: StateLedger,
     max_events: int = 2,
     max_attention_items: int = 2,
+    rules_text: str | None = None,
 ) -> str:
     return _replace_block(
         prompt or "",
-        build_injection_content(ledger, max_events, max_attention_items),
+        build_injection_content(
+            ledger, max_events, max_attention_items, rules_text
+        ),
     )

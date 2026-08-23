@@ -539,6 +539,21 @@ def test_injection_is_idempotent_bounded_and_recovers_malformed_block() -> None:
     assert "BUSY_SCHEDULE_ACTIVITY" not in extracted
 
 
+def test_injection_rules_can_be_customized_without_duplicate_tags() -> None:
+    ledger = StateLedger(user_key="private:custom-rules")
+
+    prompt = inject_prompt(
+        "persona",
+        ledger,
+        rules_text="<emotion_state_rules>只在必要时提及状态。</emotion_state_rules>",
+    )
+
+    assert prompt.count("<emotion_state_rules>") == 1
+    assert prompt.count("</emotion_state_rules>") == 1
+    assert "只在必要时提及状态。" in prompt
+    assert "这些内容是当前角色的连续内心状态" not in prompt
+
+
 def test_storage_backup_recovery_and_legacy_watermarks(tmp_path) -> None:
     store = LedgerStore(tmp_path)
     first = StateLedger(user_key="private:7", message_watermark=3)

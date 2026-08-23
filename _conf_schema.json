@@ -84,6 +84,20 @@
     "_special": "select_providers",
     "default": []
   },
+  "review_model_max_retries": {
+    "description": "低频复核每个模型最大重试次数",
+    "hint": "只计算首次请求之后的追加重试次数；0 表示当前模型技术失败后立即切换下一个模型。",
+    "type": "int",
+    "slider": {"min": 0, "max": 10, "step": 1},
+    "default": 0
+  },
+  "review_model_timeout_seconds": {
+    "description": "低频复核单次模型最大等待时间（秒）",
+    "hint": "每次低频复核模型调用的插件层硬超时；超时后按重试次数处理，当前模型耗尽后切换后备模型。",
+    "type": "int",
+    "slider": {"min": 5, "max": 600, "step": 5},
+    "default": 30
+  },
   "daily_provider_ids": {
     "description": "每日深度回顾模型链",
     "hint": "用于每日回顾、日记、事件复盘和次日心境建议，适合选择推理能力更强的模型。按从上到下顺序失败回退；留空时使用当前会话模型。最终心境仍由本地确定性结算器裁决。",
@@ -91,6 +105,20 @@
     "items": {"type": "string"},
     "_special": "select_providers",
     "default": []
+  },
+  "daily_model_max_retries": {
+    "description": "每日回顾每个模型最大重试次数",
+    "hint": "只计算首次请求之后的追加重试次数；0 表示当前模型技术失败后立即切换下一个模型。",
+    "type": "int",
+    "slider": {"min": 0, "max": 10, "step": 1},
+    "default": 1
+  },
+  "daily_model_timeout_seconds": {
+    "description": "每日回顾单次模型最大等待时间（秒）",
+    "hint": "每次每日回顾、日记和事件复盘模型调用的插件层硬超时；超时后按重试次数处理。",
+    "type": "int",
+    "slider": {"min": 5, "max": 3600, "step": 5},
+    "default": 180
   },
   "model_review_enabled": {
     "description": "启用低频模型复核",

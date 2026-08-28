@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from astrbot_plugin_emotion_state.core import storage as storage_module
 from astrbot_plugin_emotion_state.core.attention import (
     apply_attention_observation,
     is_attention_overdue,
@@ -617,6 +619,45 @@ def test_storage_preserves_utf8_emotion_facts(tmp_path) -> None:
     assert fact in raw
     assert "????" not in raw
     assert store.load(ledger.user_key).events[0].fact == fact
+
+
+def test_save_retries_replace_when_destination_is_transiently_locked(
+    tmp_path, monkeypatch
+) -> None:
+    store = LedgerStore(tmp_path)
+    store.save(StateLedger(user_key="private:locked"))
+    real_replace = os.replace
+    attempts = {"count": 0}
+
+    def flaky_replace(src, dst):
+        attempts["count"] += 1
+        if attempts["count"] <= 2:
+            raise PermissionError(5, "拒绝访问。")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", flaky_replace)
+    monkeypatch.setattr(storage_module._time, "sleep", lambda seconds: None)
+
+    ledger = StateLedger(user_key="private:locked", state_version=2)
+    store.save(ledger)
+
+    assert attempts["count"] == 3
+    assert store.load(ledger.user_key).state_version == 2
+    assert not list(store.ledger_dir.glob("*.tmp"))
+
+
+def test_save_raises_after_retry_backoff_is_exhausted(tmp_path, monkeypatch) -> None:
+    store = LedgerStore(tmp_path)
+    store.save(StateLedger(user_key="private:denied"))
+
+    def always_denied(src, dst):
+        raise PermissionError(5, "拒绝访问。")
+
+    monkeypatch.setattr(os, "replace", always_denied)
+    monkeypatch.setattr(storage_module._time, "sleep", lambda seconds: None)
+
+    with pytest.raises(PermissionError):
+        store.save(StateLedger(user_key="private:denied", state_version=2))
 
 
 def test_rules_validate_regex_and_exclude_untrusted_context() -> None:

@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import shutil
+import time as _time
 from datetime import date, datetime, time
 from pathlib import Path
 from typing import Any
@@ -115,7 +116,18 @@ class LedgerStore:
         with temporary.open("r+b") as handle:
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, path)
+        # Windows: os.replace raises PermissionError (WinError 5) while any
+        # other handle to the destination is open (e.g. a concurrent ledger
+        # scan, antivirus, or backup tool). Such handles are short-lived, so
+        # retry with backoff before giving up.
+        for attempt in range(6):
+            try:
+                os.replace(temporary, path)
+                break
+            except PermissionError:
+                if attempt == 5:
+                    raise
+                _time.sleep(0.05 * 2**attempt)
 
     def append_audit(self, user_key: str, action: str, detail: dict[str, Any]) -> None:
         record = {

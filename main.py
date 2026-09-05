@@ -31,8 +31,15 @@ from .core.daily import (
     parse_boundary,
     parse_daily_response,
 )
+from .core.guidance import (
+    build_guidance_prompt,
+    guidance_regime,
+    needs_guidance,
+    parse_guidance_response,
+)
 from .core.image_renderer import EmotionStateImageRenderer
 from .core.injector import (
+    InjectionOptions,
     InjectionSnapshot,
     build_injection_content,
     build_snapshot,
@@ -45,11 +52,23 @@ from .core.intimacy import (
     persona_intimacy_multiplier,
     persona_intimacy_tier_label,
 )
+from .core.intrinsic import parse_night_range
+from .core.life_events import (
+    build_life_event_prompt,
+    draw_slots,
+    event_slot_due,
+    memory_query,
+    parse_life_event_response,
+)
 from .core.models import (
     AttentionObservation,
     DiaryEntry,
     EventObservation,
+    ExpressionGuidance,
+    IntrinsicParams,
+    SensitivityParams,
     StateLedger,
+    iso_now,
 )
 from .core.presentation import intimacy_stage_label
 from .core.provider_gateway import ProviderGateway
@@ -79,7 +98,7 @@ PLUGIN_NAME = "astrbot_plugin_emotion_state"
     PLUGIN_NAME,
     "灵犀 · 内心世界",
     "私聊专用的连续情绪、心事、每日回顾与亲密状态系统。",
-    "v0.1.10",
+    "v0.3.0",
     "https://github.com/gongzhudeng/astrbot_plugin_emotion_state",
 )
 class EmotionStatePlugin(Star):
@@ -97,6 +116,10 @@ class EmotionStatePlugin(Star):
             self._int_config("max_active_psychological_events", 6),
             self._int_config("max_open_attention_items", 8),
             self._int_config("max_active_episodic_events", 6),
+            intrinsic_factory=self._intrinsic_params,
+            offset_half_life_minutes=self._float_config(
+                "transient_mood_half_life_minutes", 15.0
+            ),
         )
         self.rules = LocalRuleEngine(self._list_config("custom_rules"))
         self.gateway = ProviderGateway(context, config)
@@ -107,6 +130,9 @@ class EmotionStatePlugin(Star):
         self._settlement_task: asyncio.Task[Any] | None = None
         self._proactive_task: asyncio.Task[Any] | None = None
         self._attention_backfill_task: asyncio.Task[Any] | None = None
+        self._review_batch_task: asyncio.Task[Any] | None = None
+        self._guidance_task: asyncio.Task[Any] | None = None
+        self._life_events_task: asyncio.Task[Any] | None = None
         self.context._emotion_state_memory_summary = self._consume_memory_summary
         self.context._emotion_state_review_context = self._review_context
         self.context._emotion_state_schedule_context = self._schedule_context
@@ -140,6 +166,56 @@ class EmotionStatePlugin(Star):
 
     def _injection_rules_text(self) -> str:
         return str(self._config("emotion_state_rules_prompt", "") or "")
+
+    def _sensitivity(self) -> SensitivityParams:
+        """Read the six emotional-sensitivity sliders from live configuration."""
+        return SensitivityParams(
+            overall=self._float_config("sensitivity_overall", 1.0),
+            negative=self._float_config("sensitivity_negative", 1.0),
+            positive=self._float_config("sensitivity_positive", 1.0),
+            recovery=self._float_config("sensitivity_recovery", 1.0),
+            attachment=self._float_config("sensitivity_attachment", 1.0),
+        )
+
+    def _intrinsic_params(self) -> IntrinsicParams:
+        """Snapshot the endogenous-dynamics configuration for settlement."""
+        sensitivity = self._sensitivity()
+        night_hours: tuple[int, ...] = ()
+        if self._config("circadian_enabled", True):
+            night_hours = parse_night_range(
+                str(self._config("night_time_range", "22:00-02:00"))
+            )
+        return IntrinsicParams(
+            night_hours=night_hours,
+            night_strength=self._float_config("night_melancholy_strength", 0.5)
+            * sensitivity.attachment,
+            night_missing_after_hours=self._float_config(
+                "night_missing_after_hours", 2.0
+            )
+            if self._config("night_missing_enabled", True)
+            else 0.0,
+            temperament_enabled=bool(self._config("daily_temperament_enabled", True)),
+            drift_amplitude=self._float_config("mood_drift_amplitude", 0.05)
+            if self._config("mood_drift_enabled", True)
+            else 0.0,
+            temperament_words=tuple(
+                str(item)
+                for item in self._list_config("daily_mood_palette")
+                if str(item)
+            ),
+            sensitivity=sensitivity,
+        )
+
+    def _injection_options(self) -> InjectionOptions:
+        return InjectionOptions(
+            night_hours=self._intrinsic_params().night_hours,
+            guidance_enabled=bool(self._config("expression_guidance_enabled", True)),
+            guidance_when_needed=bool(
+                self._config("expression_guidance_when_needed", True)
+            ),
+            guidance_strength=self._float_config("expression_strength", 1.0),
+            now=datetime.now().astimezone(),
+        )
 
     @staticmethod
     def _is_private(event: AstrMessageEvent) -> bool:
@@ -192,6 +268,9 @@ class EmotionStatePlugin(Star):
         self._attention_backfill_task = asyncio.create_task(
             self._run_attention_history_backfill()
         )
+        self._review_batch_task = asyncio.create_task(self._review_batch_loop())
+        self._guidance_task = asyncio.create_task(self._guidance_loop())
+        self._life_events_task = asyncio.create_task(self._life_events_loop())
 
     async def terminate(self) -> None:
         if (
@@ -214,13 +293,17 @@ class EmotionStatePlugin(Star):
             == self._prompt_context
         ):
             delattr(self.context, "_emotion_state_get_prompt_context")
-        if self._settlement_task:
-            self._settlement_task.cancel()
-        if self._proactive_task:
-            self._proactive_task.cancel()
-        attention_backfill_task = getattr(self, "_attention_backfill_task", None)
-        if attention_backfill_task:
-            attention_backfill_task.cancel()
+        for name in (
+            "_settlement_task",
+            "_proactive_task",
+            "_review_batch_task",
+            "_guidance_task",
+            "_life_events_task",
+            "_attention_backfill_task",
+        ):
+            task = getattr(self, name, None)
+            if task:
+                task.cancel()
         for task in list(self._review_tasks):
             task.cancel()
         self._review_tasks.clear()
@@ -242,22 +325,26 @@ class EmotionStatePlugin(Star):
             context=self._message_context(event),
             watermark=watermark,
         )
-        for observation in run.candidates[:3]:
-            _, applied, _ = await self.service.observe(key, observation)
-            if not applied:
-                break
-        if run.transient_signals:
+        # Local rules never create durable inner events on their own anymore;
+        # they only nudge the fast short-term offset and flag suspicious hits
+        # for async model review, which is the authoritative judge.
+        signals = [*run.transient_signals, *run.candidates]
+        if signals:
             await self.service.mutate(
                 key,
                 "transient_mood",
                 lambda current: settle_transient_mood(
-                    current, run.transient_signals[:3]
+                    current, signals[:3], sensitivity=self._sensitivity()
                 ),
-                {"signals": len(run.transient_signals[:3])},
+                {"signals": len(signals[:3])},
             )
 
         has_jealousy_evidence, jealousy_source, jealousy_strength = jealousy_evidence(
             text
+        )
+        jealousy_strength *= max(
+            0.0,
+            min(2.0, self._sensitivity().negative * self._sensitivity().overall),
         )
         await self.service.mutate_if_changed(
             key,
@@ -296,11 +383,25 @@ class EmotionStatePlugin(Star):
                 {"matched_rules": matched, "persona_intimacy_tier": tier},
             )
 
-        if self._config("model_review_enabled", False) and any(
-            item.uncertain for item in run.candidates
+        if self._config("model_review_enabled", True) and self._needs_immediate_review(
+            run, has_jealousy_evidence
         ):
-            baseline = await self.service.get(key)
-            self._schedule_review(key, text, watermark, baseline.state_version)
+            self._schedule_review(key, text, watermark)
+
+    @staticmethod
+    def _needs_immediate_review(run: Any, has_jealousy_evidence: bool) -> bool:
+        """Only strong signals justify an instant review; the rest ride the batch."""
+        if has_jealousy_evidence:
+            return True
+        for match in run.matches:
+            if match.excluded:
+                continue
+            if match.rule_id == "abuse":
+                return True
+        for observation in (*run.transient_signals, *run.candidates):
+            if observation.valence <= -0.5 and observation.intensity >= 0.5:
+                return True
+        return False
 
     @filter.on_llm_request(priority=-10_000)
     async def on_llm_request(self, event: AstrMessageEvent, req: ProviderRequest):
@@ -316,6 +417,7 @@ class EmotionStatePlugin(Star):
             self._int_config("max_injected_events", 2),
             self._attention_injection_limit(),
             self._injection_rules_text(),
+            options=self._injection_options(),
         )
         snapshot = capture_injection_snapshot(
             req.system_prompt,
@@ -339,6 +441,7 @@ class EmotionStatePlugin(Star):
             self._int_config("max_injected_events", 2),
             self._attention_injection_limit(),
             self._injection_rules_text(),
+            options=self._injection_options(),
         )
 
     @staticmethod
@@ -398,9 +501,15 @@ class EmotionStatePlugin(Star):
             return "较低"
 
         summary = self._schedule_summary(diary.day_summary)
+        temperament = (
+            f"今日气质：{ledger.today_temperament.word}。\n"
+            if ledger.today_temperament.word
+            else ""
+        )
         return (
             f"已结算的今日心情：{ledger.mood.label}；"
             f"能量{level(ledger.mood.energy)}，紧张程度{level(ledger.mood.tension)}。\n"
+            f"{temperament}"
             f"最近回顾摘要：{summary or '暂无摘要'}\n"
             "这是软参考，只用于安排没有明确约定的时段和穿搭氛围；"
             "不得覆盖已确认计划、天气、安全或日程格式约束。"
@@ -486,7 +595,7 @@ class EmotionStatePlugin(Star):
                 history_json = json.dumps(history, ensure_ascii=False)[:12000]
                 prompt = (
                     "你是待关注事项历史对账器。仅返回 JSON 对象"
-                    "{\"attention_observations\":[...]}。\n"
+                    '{"attention_observations":[...]}。\n'
                     "逐条比对目录和真实聊天记录。只有能确认完整事项已经发生时才输出"
                     "action=complete，并原样填写item_id、item_version、evidence_quote、"
                     "evidence_speaker和confidence(>=0.78)。用户或角色的具体完成说明，"
@@ -579,10 +688,7 @@ class EmotionStatePlugin(Star):
                 not item_id
                 or item_version is None
                 or confidence < 0.78
-                or (
-                    action != "complete"
-                    and evidence_speaker != "user"
-                )
+                or (action != "complete" and evidence_speaker != "user")
                 or (
                     action == "complete"
                     and evidence_speaker not in {"user", "assistant", "both"}
@@ -746,13 +852,16 @@ class EmotionStatePlugin(Star):
         user_key: str,
         text: str,
         watermark: int,
-        baseline_state_version: int,
     ) -> None:
+        """Fire-and-forget immediate review for one suspicious message."""
+
         async def review() -> None:
             try:
                 prompt = (
                     "请只返回 JSON 数组，判断以下私聊消息是否形成需要持续关注的心事。"
-                    "考虑玩笑、引用、对象和前后文，不要把普通激动误判为性唤起。"
+                    "考虑玩笑、引用、对象和前后文；讨论外部内容（视频、新闻、别人）不算攻击；"
+                    "只有在确认是用户对角色本人的负面表达时才输出 target=user 的攻击类心事；"
+                    "不确定就输出空数组 []。不要把普通激动误判为性唤起。"
                     f"消息：{text[:1000]}"
                 )
                 response, provider_id = await self.gateway.complete(
@@ -761,45 +870,453 @@ class EmotionStatePlugin(Star):
                 payload = json.loads(response)
                 if not isinstance(payload, list):
                     return
-                expected_version = baseline_state_version
-                for item in payload[:3]:
-                    if not isinstance(item, dict):
-                        continue
-                    ledger = await self.service.get(user_key)
-                    if ledger.state_version != expected_version:
-                        return
-                    observation = EventObservation(
-                        action=str(item.get("action", "create")),
-                        fact=bound_complete_text(
-                            str(item.get("fact") or text), EVENT_FACT_STORAGE_CHARS
-                        ),
-                        emotional_meaning=str(
-                            item.get("emotional_meaning") or "待复核的互动影响"
-                        ),
-                        target=str(item.get("target", "unknown")),
-                        target_basis=str(item.get("target_basis", "")),
-                        evidence_quote=str(item.get("evidence_quote", "")),
-                        evidence_speaker=str(item.get("evidence_speaker", "")),
-                        valence=float(item.get("valence", 0.0)),
-                        intensity=float(item.get("intensity", 0.35)),
-                        confidence=float(item.get("confidence", 0.5)),
-                        source=f"model:{provider_id}",
-                        message_watermark=watermark,
-                        expected_state_version=expected_version,
-                        uncertain=bool(item.get("uncertain", True)),
-                    )
-                    updated, applied, _ = await self.service.observe(
-                        user_key, observation
-                    )
-                    if not applied:
-                        return
-                    expected_version = updated.state_version
+                await self._apply_review_items(
+                    user_key, payload, watermark, provider_id
+                )
+            except asyncio.CancelledError:
+                raise
             except (RuntimeError, ValueError, TypeError, json.JSONDecodeError) as exc:
                 logger.debug("[EmotionState] asynchronous review skipped: %s", exc)
 
-        task = asyncio.create_task(review())
+        self._spawn_review_task(review())
+
+    def _spawn_review_task(self, coroutine: Any) -> None:
+        task = asyncio.create_task(coroutine)
         self._review_tasks.add(task)
         task.add_done_callback(self._review_tasks.discard)
+
+    async def _apply_review_items(
+        self,
+        user_key: str,
+        payload: list[Any],
+        watermark: int,
+        provider_id: str,
+    ) -> None:
+        """Apply up to three review observations with strict staleness checks."""
+        expected_version = (await self.service.get(user_key)).state_version
+        for item in payload[:3]:
+            if not isinstance(item, dict):
+                continue
+            ledger = await self.service.get(user_key)
+            if ledger.state_version != expected_version:
+                return
+            observation = EventObservation(
+                action=str(item.get("action", "create")),
+                fact=bound_complete_text(
+                    str(item.get("fact", "")), EVENT_FACT_STORAGE_CHARS
+                ),
+                emotional_meaning=str(
+                    item.get("emotional_meaning") or "待复核的互动影响"
+                ),
+                target=str(item.get("target", "unknown")),
+                target_basis=str(item.get("target_basis", "")),
+                evidence_quote=str(item.get("evidence_quote", "")),
+                evidence_speaker=str(item.get("evidence_speaker", "")),
+                category=str(item.get("category", "concrete")),
+                valence=float(item.get("valence", 0.0)),
+                intensity=float(item.get("intensity", 0.35)),
+                confidence=float(item.get("confidence", 0.5)),
+                source=f"model:{provider_id}",
+                message_watermark=watermark,
+                expected_state_version=expected_version,
+                uncertain=bool(item.get("uncertain", False)),
+                tags=[str(tag) for tag in item.get("tags", [])[:5]]
+                if isinstance(item.get("tags"), list)
+                else [],
+            )
+            updated, applied, _ = await self.service.observe(user_key, observation)
+            if not applied:
+                return
+            expected_version = updated.state_version
+
+    async def _recent_chat_messages(self, user_key: str, limit: int = 24) -> str:
+        """Read the recent private chat tail from the conversation manager."""
+        manager = getattr(self.context, "conversation_manager", None)
+        if manager is None:
+            return ""
+        try:
+            messages = await manager.get_messages(
+                user_key, limit=limit, use_cache=False
+            )
+        except Exception as exc:
+            logger.debug("[EmotionState] conversation tail unavailable: %s", exc)
+            return ""
+        lines: list[str] = []
+        for message in messages:
+            is_assistant = message.role == "assistant" or bool(
+                (message.metadata or {}).get("is_bot_message", False)
+            )
+            text = str(message.content_to_text(message.content) or "").strip()
+            if not text:
+                continue
+            speaker = "角色" if is_assistant else "用户"
+            lines.append(f"{speaker}：{text[:400]}")
+        return "\n".join(lines[-24:])
+
+    async def _review_batch_loop(self) -> None:
+        """Throttled batch review: ~one model call per N messages, never blocking."""
+        while True:
+            try:
+                if self._config("enabled", True) and self._config(
+                    "model_review_enabled", True
+                ):
+                    for user_key in await asyncio.to_thread(self.store.user_keys):
+                        await self._maybe_batch_review(user_key)
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.error("[EmotionState] batch review loop failed: %s", exc)
+                await asyncio.sleep(60)
+
+    async def _maybe_batch_review(self, user_key: str) -> None:
+        ledger = await self.service.get(user_key)
+        unread = ledger.message_watermark - ledger.last_reviewed_watermark
+        if unread <= 0:
+            return
+        batch_size = max(1, self._int_config("review_batch_messages", 10))
+        gap_minutes = max(1.0, self._float_config("review_max_gap_minutes", 30.0))
+        due_by_count = unread >= batch_size
+        due_by_gap = False
+        if ledger.last_batch_review_at:
+            try:
+                last = datetime.fromisoformat(ledger.last_batch_review_at)
+                due_by_gap = (
+                    datetime.now().astimezone() - last
+                ).total_seconds() / 60.0 >= gap_minutes
+            except (TypeError, ValueError):
+                due_by_gap = True
+        else:
+            due_by_gap = True
+        if not (due_by_count or due_by_gap):
+            return
+        await self._run_batch_review(user_key)
+
+    async def _run_batch_review(self, user_key: str) -> None:
+        ledger = await self.service.get(user_key)
+        if ledger.message_watermark <= ledger.last_reviewed_watermark:
+            return
+        chat_tail = await self._recent_chat_messages(user_key)
+        if not chat_tail:
+            await self.service.mutate(
+                user_key,
+                "batch_review_mark",
+                self._mark_batch_reviewed(ledger.message_watermark),
+            )
+            return
+        prompt = (
+            "请只返回 JSON 数组，判断以下最近私聊记录中是否有值得角色持续记挂的心事"
+            "或明显的情绪影响。要求：\n"
+            "- 逐条考虑玩笑、转发、引用和前后文；讨论外部内容（视频、抖音、新闻、别人）"
+            "不是攻击，最多产生一条轻度的瞬时情绪，不形成心事。\n"
+            "- 只有确认是用户对角色本人的负面表达（辱骂、贬低、故意冷落）才输出攻击类心事"
+            "（target=user）；不确定就跳过。\n"
+            "- 正向事件（被夸、亲密互动、具体约定）也可以形成心事；对象如实标注"
+            "（user/third_party/unknown）。\n"
+            "- 每项字段：action(create/intensify/ease/merge)、fact(第一人称、≤80字)、"
+            "emotional_meaning、target、target_basis、evidence_quote、evidence_speaker、"
+            "category(episodic/psychological/concrete)、valence(-1~1)、intensity(0~1)、"
+            "confidence(0~1)。最多 3 项；没有值得记录的就输出 []。\n"
+            f"最近私聊记录：\n{chat_tail[:6000]}"
+        )
+        try:
+            response, provider_id = await self.gateway.complete(
+                prompt,
+                user_key,
+                task="review",
+            )
+            payload = json.loads(response)
+            if not isinstance(payload, list):
+                return
+            await self._apply_review_items(
+                user_key, payload, ledger.message_watermark, provider_id
+            )
+        except asyncio.CancelledError:
+            raise
+        except (RuntimeError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            logger.debug(
+                "[EmotionState] batch review skipped for %s: %s", user_key, exc
+            )
+        finally:
+            current = await self.service.get(user_key, settle=False)
+            if current.message_watermark >= ledger.message_watermark:
+                await self.service.mutate(
+                    user_key,
+                    "batch_review_mark",
+                    self._mark_batch_reviewed(ledger.message_watermark),
+                )
+
+    def _mark_batch_reviewed(self, watermark: int) -> Any:
+        def mutation(current: StateLedger) -> StateLedger:
+            current.last_reviewed_watermark = max(
+                current.last_reviewed_watermark, int(watermark)
+            )
+            current.last_batch_review_at = datetime.now().astimezone().isoformat()
+            return current
+
+        return mutation
+
+    async def _guidance_loop(self) -> None:
+        """Regenerate the cached reply suggestion when the expressed state changes."""
+        while True:
+            try:
+                if self._config("enabled", True) and self._config(
+                    "expression_guidance_enabled", True
+                ):
+                    for user_key in await asyncio.to_thread(self.store.user_keys):
+                        await self._maybe_refresh_guidance(user_key)
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.error("[EmotionState] guidance loop failed: %s", exc)
+                await asyncio.sleep(60)
+
+    async def _maybe_refresh_guidance(self, user_key: str) -> None:
+        ledger = await self.service.get(user_key)
+        options = self._injection_options()
+        regime = guidance_regime(
+            ledger,
+            night_hours=options.night_hours,
+            now=options.current_time(),
+        )
+        gated = options.guidance_when_needed
+        if gated and not needs_guidance(
+            ledger,
+            night_hours=options.night_hours,
+            now=options.current_time(),
+        ):
+            return
+        guidance = ledger.expression_guidance
+        min_interval = max(
+            5.0, self._float_config("guidance_min_interval_minutes", 120)
+        )
+        if guidance is None:
+            due = True
+        else:
+            regime_changed = guidance.regime != regime
+            try:
+                generated_at = datetime.fromisoformat(guidance.generated_at)
+                age_minutes = (
+                    datetime.now().astimezone() - generated_at
+                ).total_seconds() / 60.0
+            except (TypeError, ValueError):
+                age_minutes = min_interval
+            due = regime_changed and age_minutes >= min(30.0, min_interval)
+        if not due:
+            return
+        self._spawn_review_task(self._run_guidance_refresh(user_key, regime))
+
+    async def _run_guidance_refresh(self, user_key: str, regime: str) -> None:
+        try:
+            ledger = await self.service.get(user_key)
+            options = self._injection_options()
+            max_chars = max(20, self._int_config("guidance_max_chars", 200))
+            prompt = build_guidance_prompt(
+                ledger,
+                now=options.current_time(),
+                night_hours=options.night_hours,
+                style_hint=str(self._config("expression_style_hint", "") or ""),
+                previous={
+                    "tone": ledger.expression_guidance.tone
+                    if ledger.expression_guidance
+                    else ""
+                },
+                max_chars=max_chars,
+            )
+            response, provider_id = await self.gateway.complete(
+                prompt,
+                user_key,
+                task="guidance",
+                validate=lambda text: parse_guidance_response(text, max_chars),
+            )
+            data = parse_guidance_response(response, max_chars)
+
+            def commit(current: StateLedger) -> StateLedger:
+                current.expression_guidance = ExpressionGuidance(
+                    tone=data["tone"],
+                    can_say=data["can_say"],
+                    avoid=data["avoid"],
+                    generated_at=iso_now(),
+                    trigger="regime_change",
+                    regime=regime,
+                    provider_id=provider_id,
+                    model_generated=True,
+                )
+                return current
+
+            await self.service.mutate(
+                user_key,
+                "expression_guidance_update",
+                commit,
+                {"regime": regime, "provider_id": provider_id},
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # Keep the previous cached guidance; it stays coherent because mood
+            # changes slowly, and the injection gate hides it in neutral states.
+            logger.debug(
+                "[EmotionState] guidance refresh skipped for %s: %s", user_key, exc
+            )
+
+    async def _life_events_loop(self) -> None:
+        """Draw daily random slots and generate memory-grounded inner events."""
+        while True:
+            try:
+                if self._config("enabled", True) and self._config(
+                    "life_events_enabled", True
+                ):
+                    max_events = max(0, self._int_config("life_events_per_day_max", 2))
+                    for user_key in await asyncio.to_thread(self.store.user_keys):
+                        ledger = await self.service.get(user_key)
+                        today = datetime.now().astimezone().date().isoformat()
+                        if ledger.life_event_slots_date != today:
+                            slots = draw_slots(
+                                user_key,
+                                today,
+                                str(
+                                    self._config(
+                                        "life_event_time_windows", "10:00-22:30"
+                                    )
+                                ),
+                                max_events,
+                            )
+
+                            def reset_slots(current: StateLedger) -> StateLedger:
+                                current.life_event_slots = [
+                                    slot.isoformat() for slot in slots
+                                ]
+                                current.life_event_slots_date = today
+                                current.life_events_today = 0
+                                return current
+
+                            await self.service.mutate(
+                                user_key,
+                                "life_event_slots",
+                                reset_slots,
+                                {"slots": [s.isoformat() for s in slots]},
+                            )
+                        elif (
+                            max_events > 0
+                            and ledger.life_events_today < max_events
+                            and event_slot_due(ledger, datetime.now().astimezone())
+                        ):
+                            await self._run_life_event(user_key)
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.error("[EmotionState] life events loop failed: %s", exc)
+                await asyncio.sleep(60)
+
+    async def _run_life_event(self, user_key: str) -> None:
+        try:
+            ledger = await self.service.get(user_key)
+            memories: list[str] = []
+            lookup = getattr(self.context, "_livingmemory_search_memories", None)
+            if callable(lookup):
+                try:
+                    raw = lookup(
+                        memory_query(ledger),
+                        self._int_config("memory_retrieval_top_k", 6),
+                        user_key,
+                    )
+                    raw = await raw if asyncio.iscoroutine(raw) else raw
+                    if isinstance(raw, list):
+                        memories = [
+                            str(item.get("text", "")).strip()
+                            for item in raw
+                            if isinstance(item, dict)
+                            and str(item.get("text", "")).strip()
+                        ]
+                except Exception as exc:
+                    logger.debug("[EmotionState] memory lookup failed: %s", exc)
+            kb_context: list[str] = []
+            kb_search = getattr(self.context, "_knowledge_base_search", None)
+            collection = str(self._config("life_event_kb_collection", "") or "").strip()
+            if callable(kb_search) and collection:
+                try:
+                    raw = kb_search(
+                        collection,
+                        memory_query(ledger),
+                        self._int_config("memory_retrieval_top_k", 6),
+                    )
+                    raw = await raw if asyncio.iscoroutine(raw) else raw
+                    for document, _score in raw or []:
+                        text = str(getattr(document, "text", "") or "").strip()
+                        if not text:
+                            text = str(
+                                (getattr(document, "metadata", {}) or {}).get(
+                                    "text", ""
+                                )
+                            ).strip()
+                        if text:
+                            kb_context.append(text)
+                except Exception as exc:
+                    logger.debug("[EmotionState] knowledge base lookup failed: %s", exc)
+            options = self._injection_options()
+            prompt = build_life_event_prompt(
+                ledger,
+                now=options.current_time(),
+                memories=memories,
+                kb_context=kb_context,
+            )
+            response, provider_id = await self.gateway.complete(
+                prompt,
+                user_key,
+                task="life_event",
+            )
+            parsed = parse_life_event_response(response)
+            if parsed is not None:
+                observation = EventObservation(
+                    action="create",
+                    fact=parsed["fact"],
+                    emotional_meaning=parsed["emotional_meaning"]
+                    or "突然想起的一件小事，带来了轻微的心情波动",
+                    target="third_party",
+                    category="episodic",
+                    valence=parsed["valence"],
+                    intensity=min(0.45, parsed["intensity"]),
+                    confidence=0.62,
+                    source="life_event",
+                    note=f"model:{provider_id}",
+                    tags=["life_event"],
+                )
+                await self.service.observe(user_key, observation)
+
+            def consume(current: StateLedger) -> StateLedger:
+                current.life_events_today = min(
+                    current.life_events_today + 1,
+                    max(1, self._int_config("life_events_per_day_max", 2)),
+                )
+                current.life_event_slots = [
+                    slot
+                    for slot in current.life_event_slots
+                    if not self._slot_consumed(slot)
+                ]
+                return current
+
+            await self.service.mutate(
+                user_key,
+                "life_event_consumed",
+                consume,
+                {"provider_id": provider_id, "skipped": parsed is None},
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.debug("[EmotionState] life event skipped for %s: %s", user_key, exc)
+
+    @staticmethod
+    def _slot_consumed(slot: str) -> bool:
+        try:
+            slot_time = datetime.fromisoformat(slot)
+        except (TypeError, ValueError):
+            return True
+        if slot_time.tzinfo is None:
+            return False
+        return slot_time <= datetime.now().astimezone()
 
     async def _daily_context(self, user_key: str) -> dict[str, Any]:
         callback = getattr(self.context, "_livingmemory_get_daily_context", None)
@@ -848,6 +1365,12 @@ class EmotionStatePlugin(Star):
         has_structured_evidence = int(
             snapshot.get("schema_version", 0) or 0
         ) >= 1 and isinstance(evidence, list)
+        attachment = self._sensitivity().attachment
+        silence_cap = min(
+            0.8,
+            self._float_config("proactive_silence_max_intensity", 0.55)
+            * max(0.5, 0.5 + 0.5 * attachment),
+        )
 
         if has_structured_evidence:
 
@@ -859,9 +1382,7 @@ class EmotionStatePlugin(Star):
                     threshold_minutes=self._float_config(
                         "proactive_silence_threshold_minutes", 180.0
                     ),
-                    max_intensity=self._float_config(
-                        "proactive_silence_max_intensity", 0.55
-                    ),
+                    max_intensity=silence_cap,
                     max_stage=self._int_config("proactive_silence_max_stages", 3),
                     episodic_limit=self._int_config("max_active_episodic_events", 6),
                 )
@@ -886,9 +1407,7 @@ class EmotionStatePlugin(Star):
                 threshold_minutes=self._float_config(
                     "proactive_silence_threshold_minutes", 180.0
                 ),
-                max_intensity=self._float_config(
-                    "proactive_silence_max_intensity", 0.55
-                ),
+                max_intensity=silence_cap,
                 max_stage=self._int_config("proactive_silence_max_stages", 3),
             )
             return acknowledge_proactive_reply(
@@ -1065,6 +1584,7 @@ class EmotionStatePlugin(Star):
             self._int_config("max_injected_events", 2),
             self._attention_injection_limit(),
             self._injection_rules_text(),
+            options=self._injection_options(),
         )
         return capture_injection_snapshot(prompt, ledger, source="preview")
 
@@ -1178,7 +1698,26 @@ class EmotionStatePlugin(Star):
             intimacy_stage_label(stage),
             datetime.now().astimezone(),
             self._config("emotion_view_theme", "自动"),
+            self._guidance_view_payload(ledger),
         )
+
+    def _guidance_view_payload(self, ledger: StateLedger) -> dict[str, str] | None:
+        """Cached reply suggestion for the image, honoring the same injection gate."""
+        if not self._config("expression_guidance_enabled", True):
+            return None
+        guidance = ledger.expression_guidance
+        if guidance is None:
+            return None
+        if self._config("expression_guidance_when_needed", True) and not needs_guidance(
+            ledger,
+            night_hours=self._injection_options().night_hours,
+        ):
+            return None
+        return {
+            "tone": guidance.tone,
+            "can_say": guidance.can_say,
+            "avoid": guidance.avoid,
+        }
 
     async def _settle_text(self, event: AstrMessageEvent) -> str | None:
         if not self._is_private(event):
@@ -1195,6 +1734,7 @@ class EmotionStatePlugin(Star):
             ledger,
             self._int_config("max_injected_events", 2),
             self._attention_injection_limit(),
+            options=self._injection_options(),
         )
 
     async def _diary_rerun_text(self, event: AstrMessageEvent) -> str | None:
@@ -1214,7 +1754,12 @@ class EmotionStatePlugin(Star):
             return None
         key = self._user_key(event)
         lines = []
-        for task, label in (("review", "低频复核"), ("daily", "每日深度回顾")):
+        for task, label in (
+            ("review", "低频复核"),
+            ("daily", "每日深度回顾"),
+            ("guidance", "表达建议"),
+            ("life_event", "生活事件"),
+        ):
             configured = self.gateway.configured_ids(task)
             resolved = [
                 self.gateway.provider_id(item)
@@ -1581,6 +2126,8 @@ class EmotionStatePlugin(Star):
         )
         review_chain = self.gateway.configured_ids("review")
         daily_chain = self.gateway.configured_ids("daily")
+        guidance_chain = self.gateway.configured_ids("guidance")
+        life_event_chain = self.gateway.configured_ids("life_event")
         actual = self._actual_injection_snapshot(user_key)
         event_limit = self._int_config("max_injected_events", 2)
         selected_events, event_exclusions = select_injected_events_with_reasons(
@@ -1644,6 +2191,36 @@ class EmotionStatePlugin(Star):
                     "review_provider_chain": review_chain
                     or ["current_session_provider"],
                     "daily_provider_chain": daily_chain or ["current_session_provider"],
+                    "guidance_provider_chain": guidance_chain
+                    or ["review_chain_fallback"],
+                    "life_event_provider_chain": life_event_chain
+                    or ["review_chain_fallback"],
+                    "today_temperament": ledger.today_temperament.word,
+                    "expression_guidance": {
+                        "tone": ledger.expression_guidance.tone
+                        if ledger.expression_guidance
+                        else "",
+                        "generated_at": ledger.expression_guidance.generated_at
+                        if ledger.expression_guidance
+                        else "",
+                        "regime": ledger.expression_guidance.regime
+                        if ledger.expression_guidance
+                        else "",
+                        "will_inject": bool(
+                            self._config("expression_guidance_enabled", True)
+                            and ledger.expression_guidance is not None
+                            and (
+                                not self._config(
+                                    "expression_guidance_when_needed", True
+                                )
+                                or needs_guidance(
+                                    ledger,
+                                    night_hours=self._injection_options().night_hours,
+                                )
+                            )
+                        ),
+                    },
+                    "life_events_today": ledger.life_events_today,
                     "selected_injection_event_count": len(selected_events),
                     "max_injected_events": event_limit,
                     "injection_event_evaluations": [

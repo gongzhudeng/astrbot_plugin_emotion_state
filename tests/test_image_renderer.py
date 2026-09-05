@@ -105,9 +105,7 @@ def test_longer_event_produces_taller_image(tmp_path) -> None:
     short = open_png(
         renderer.render(ledger, [short_event], [], "身体平静", now, "亮色")
     )
-    long = open_png(
-        renderer.render(ledger, ledger.events, [], "身体平静", now, "亮色")
-    )
+    long = open_png(renderer.render(ledger, ledger.events, [], "身体平静", now, "亮色"))
 
     assert long.height > short.height + 500
 
@@ -123,3 +121,24 @@ def test_logo_is_read_from_plugin_directory(tmp_path) -> None:
     second = renderer.render(ledger, [], [], "身体平静", now, "亮色")
 
     assert first != second
+
+
+def test_guidance_section_renders_and_expands_image(tmp_path) -> None:
+    renderer = EmotionStateImageRenderer(tmp_path)
+    ledger = make_ledger()
+    now = datetime(2026, 8, 17, 12, tzinfo=timezone.utc)
+    guidance = {
+        "tone": "夜深了，语气比白天软、慢，带一点黏人和低落。",
+        "can_say": "主动说今晚有点安静得不习惯，想起他很久没来了，有点难过；" * 3,
+        "avoid": "无缘由地冷淡或阴阳怪气；不要一上来就质问。",
+    }
+
+    without = open_png(renderer.render(ledger, [], [], "身体平静", now, "亮色"))
+    with_guidance = open_png(
+        renderer.render(ledger, [], [], "身体平静", now, "亮色", guidance)
+    )
+
+    assert with_guidance.height > without.height
+    assert with_guidance.width == without.width == 1080
+    # The suggestion card keeps its content inside the canvas bounds.
+    assert with_guidance.getpixel((540, with_guidance.height - 30)) != None

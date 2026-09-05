@@ -16,7 +16,10 @@ except ImportError:
     Provider = object  # type: ignore[misc,assignment]
 
 
-ProviderTask = Literal["review", "daily"]
+ProviderTask = Literal["review", "daily", "guidance", "life_event"]
+
+# Tasks that fall back to the review chain when their own chain is not configured.
+_REVIEW_FALLBACK_TASKS = ("guidance", "life_event")
 
 
 class ProviderGateway:
@@ -37,7 +40,15 @@ class ProviderGateway:
             return self.config.get(key, None) is not None
 
     def configured_ids(self, task: ProviderTask = "review") -> list[str]:
-        key = "daily_provider_ids" if task == "daily" else "review_provider_ids"
+        key = f"{task}_provider_ids"
+        if task in _REVIEW_FALLBACK_TASKS:
+            # New tasks ride the same ordered chain mechanic: own chain first,
+            # then the review chain, then (in providers()) the session model.
+            if self._has_key(key):
+                own = self._ids(key)
+                if own:
+                    return own
+            return self.configured_ids("review")
         if self._has_key(key):
             return self._ids(key)
 
@@ -101,6 +112,7 @@ class ProviderGateway:
             )
             default_retries, default_timeout = 1, 180.0
         else:
+            # review / guidance / life_event share the review call limits.
             retries_key, timeout_key = (
                 "review_model_max_retries",
                 "review_model_timeout_seconds",
@@ -199,9 +211,7 @@ class ProviderGateway:
                     )
                     return text, provider_id
                 except asyncio.TimeoutError:
-                    last_error = (
-                        f"{provider_id} 超时（{timeout_seconds:.1f}s）"
-                    )
+                    last_error = f"{provider_id} 超时（{timeout_seconds:.1f}s）"
                     logger.warning(
                         "[EmotionState] Provider %s timed out for %s (attempt %s/%s, limit=%.1fs)",
                         provider_id,

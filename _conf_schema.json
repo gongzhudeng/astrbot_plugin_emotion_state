@@ -8,26 +8,38 @@
     "description": "情绪查看图片主题",
     "hint": "自动模式会在本地时间 07:00 至 19:00 使用亮色，其余时间使用暗色。",
     "type": "string",
-    "options": ["自动", "亮色", "暗色"],
+    "options": [
+      "自动",
+      "亮色",
+      "暗色"
+    ],
     "default": "自动"
   },
   "max_injected_events": {
     "description": "最多注入的当前事情数量",
-    "hint": "正面和负面事情共用额度，建议设置为 2 或 3。",
+    "hint": "正面和负面事情共用额度，建议设置为 2 或 3；设置为 0 表示完全不注入心事列表（心事仍会在后台正常结算并供表达建议引用）。",
     "type": "int",
-    "slider": {"min": 1, "max": 3, "step": 1},
+    "slider": {
+      "min": 0,
+      "max": 3,
+      "step": 1
+    },
     "default": 2
   },
   "max_injected_attention_items": {
     "description": "最多注入模型提示词的待关注事项数量",
-    "hint": "只限制模型提示词注入数量，不限制后台账本和诊断展示；设置为 0 可完全关闭待关注事项注入。",
+    "hint": "只限制模型提示词注入数量，不限制后台账本和诊断展示；设置为 0 表示完全不注入待关注事项。",
     "type": "int",
-    "slider": {"min": 0, "max": 4, "step": 1},
+    "slider": {
+      "min": 0,
+      "max": 4,
+      "step": 1
+    },
     "default": 2
   },
   "emotion_state_rules_prompt": {
     "description": "情绪状态注入规则说明（可自定义）",
-    "hint": "填写注入到模型提示词中的简短规则说明，不需要包含 <emotion_state_rules> 标签；留空使用内置默认说明。",
+    "hint": "填写注入到模型提示词中的简短规则说明，不需要包含 <emotion_state_rules> 标签；留空表示完全不注入规则说明块（不再回退到默认文案）。",
     "type": "string",
     "max_length": 2000,
     "obvious_hint": true,
@@ -39,21 +51,33 @@
     "description": "最多保留的近期心事数量（未归档）",
     "hint": "近期片段和短时情绪共用此额度；超过后按优先级归档，历史记录仍会保留。",
     "type": "int",
-    "slider": {"min": 3, "max": 12, "step": 1},
+    "slider": {
+      "min": 3,
+      "max": 12,
+      "step": 1
+    },
     "default": 6
   },
   "max_active_psychological_events": {
     "description": "最多保留的长期心事数量（未归档）",
     "hint": "长期具体心事和心理余波共用此额度；active、candidate、easing、dormant 等未归档状态都会计数，超过后按优先级归档并保留历史。",
     "type": "int",
-    "slider": {"min": 1, "max": 12, "step": 1},
+    "slider": {
+      "min": 1,
+      "max": 12,
+      "step": 1
+    },
     "default": 6
   },
   "max_open_attention_items": {
     "description": "最多保留的未终结待关注事项数量",
     "hint": "只限制 proposed/open 事项；完成、取消、替代和容量归档都会保留历史记录，不会因逾期或沉默自动判定完成。",
     "type": "int",
-    "slider": {"min": 1, "max": 20, "step": 1},
+    "slider": {
+      "min": 1,
+      "max": 20,
+      "step": 1
+    },
     "default": 8
   },
   "decay_half_life_hours": {
@@ -76,43 +100,63 @@
   "proactive_silence_max_stages": {
     "description": "单条主动消息最多结算阶段",
     "type": "int",
-    "slider": {"min": 1, "max": 5, "step": 1},
+    "slider": {
+      "min": 1,
+      "max": 5,
+      "step": 1
+    },
     "default": 3
   },
   "proactive_silence_max_intensity": {
     "description": "主动未回应事件最大强度",
     "hint": "限制这类事件对整体心境的影响，避免一次未及时回复永久主导关系状态。",
     "type": "float",
-    "slider": {"min": 0.1, "max": 0.8, "step": 0.05},
+    "slider": {
+      "min": 0.1,
+      "max": 0.8,
+      "step": 0.05
+    },
     "default": 0.55
   },
   "review_provider_ids": {
     "description": "低频消息复核模型链",
-    "hint": "只用于异步复核本地规则不够确定的用户私聊，适合选择速度快、成本较低的模型。按从上到下顺序失败回退；留空时使用当前会话模型。",
+    "hint": "用于异步复核用户消息的情绪影响，也是表达建议、生活事件调用未单独配置模型链时的兜底链。适合选择速度快、成本较低的模型。按从上到下顺序失败回退；留空时使用当前会话模型。",
     "type": "list",
-    "items": {"type": "string"},
+    "items": {
+      "type": "string"
+    },
     "_special": "select_providers",
     "default": []
   },
   "review_model_max_retries": {
     "description": "低频复核每个模型最大重试次数",
-    "hint": "只计算首次请求之后的追加重试次数；0 表示当前模型技术失败后立即切换下一个模型。",
+    "hint": "只计算首次请求之后的追加重试次数；0 表示当前模型技术失败后立即切换下一个模型。表达建议和生活事件的模型调用同样沿用这一设置。",
     "type": "int",
-    "slider": {"min": 0, "max": 10, "step": 1},
+    "slider": {
+      "min": 0,
+      "max": 10,
+      "step": 1
+    },
     "default": 0
   },
   "review_model_timeout_seconds": {
     "description": "低频复核单次模型最大等待时间（秒）",
-    "hint": "每次低频复核模型调用的插件层硬超时；超时后按重试次数处理，当前模型耗尽后切换后备模型。",
+    "hint": "每次低频复核模型调用的插件层硬超时；超时后按重试次数处理，当前模型耗尽后切换后备模型。表达建议和生活事件的模型调用同样沿用这一设置。",
     "type": "int",
-    "slider": {"min": 5, "max": 600, "step": 5},
+    "slider": {
+      "min": 5,
+      "max": 600,
+      "step": 5
+    },
     "default": 30
   },
   "daily_provider_ids": {
     "description": "每日深度回顾模型链",
     "hint": "用于每日回顾、日记、事件复盘和次日心境建议，适合选择推理能力更强的模型。按从上到下顺序失败回退；留空时使用当前会话模型。最终心境仍由本地确定性结算器裁决。",
     "type": "list",
-    "items": {"type": "string"},
+    "items": {
+      "type": "string"
+    },
     "_special": "select_providers",
     "default": []
   },
@@ -120,27 +164,37 @@
     "description": "每日回顾每个模型最大重试次数",
     "hint": "只计算首次请求之后的追加重试次数；0 表示当前模型技术失败后立即切换下一个模型。",
     "type": "int",
-    "slider": {"min": 0, "max": 10, "step": 1},
+    "slider": {
+      "min": 0,
+      "max": 10,
+      "step": 1
+    },
     "default": 1
   },
   "daily_model_timeout_seconds": {
     "description": "每日回顾单次模型最大等待时间（秒）",
     "hint": "每次每日回顾、日记和事件复盘模型调用的插件层硬超时；超时后按重试次数处理。",
     "type": "int",
-    "slider": {"min": 5, "max": 3600, "step": 5},
+    "slider": {
+      "min": 5,
+      "max": 3600,
+      "step": 5
+    },
     "default": 180
   },
   "model_review_enabled": {
-    "description": "启用低频模型复核",
-    "hint": "本地规则先处理用户私聊；仅在候选不够确定时异步调用低频消息复核模型链，不阻塞当前回复。关闭后本地识别和结算仍正常工作。",
+    "description": "启用模型复核（情绪影响判定以模型为主）",
+    "hint": "本地关键词只产生即时瞬时反应，持久心事的创建一律由模型异步复核决定：攒够批量条数或超过时间间隔后统一复核最近一批消息，辱骂/吃醋等强信号会立即复核。全部异步执行，不阻塞回复。",
     "type": "bool",
-    "default": false
+    "default": true
   },
   "custom_rules": {
     "description": "自定义本地规则（可留空）",
     "hint": "不必填写：留空仍使用内置的正向、负向、道歉安慰、亲近、玩笑和攻击规则。需要角色专属词时再添加对象；支持 id、enabled、priority、match_type、words/pattern、exclude_words、action、target、valence、intensity、confidence、meaning，完整示例见插件 README。规则只产生证据，不直接覆盖最终状态。",
     "type": "list",
-    "items": {"type": "object"},
+    "items": {
+      "type": "object"
+    },
     "default": []
   },
   "intimacy_enabled": {
@@ -153,15 +207,27 @@
     "description": "默认人设亲密档位",
     "hint": "固定的人设亲密基线，不随聊天或时间变化。档位越高，相同亲密互动引起身体敏感和性唤起的增幅越大；身体反应本身仍会随时间回落。",
     "type": "string",
-    "options": ["普通亲密", "很亲密", "非常亲密", "对你有很强的身体吸引"],
+    "options": [
+      "普通亲密",
+      "很亲密",
+      "非常亲密",
+      "对你有很强的身体吸引"
+    ],
     "default": "很亲密"
   },
   "intimacy_keywords": {
     "description": "用户亲密互动规则词",
     "hint": "只扫描用户发来的私聊消息，不扫描 AI 回复。命中只是一次有上限的身体反应证据，会小幅调整身体敏感和性唤起，并随时间回落。",
     "type": "list",
-    "items": {"type": "string"},
-    "default": ["亲一下", "抱一下", "想你", "喜欢你"]
+    "items": {
+      "type": "string"
+    },
+    "default": [
+      "亲一下",
+      "抱一下",
+      "想你",
+      "喜欢你"
+    ]
   },
   "intimacy_decay_half_life_hours": {
     "description": "身体反应自然回落半衰期（小时）",
@@ -196,31 +262,319 @@
   "diary_max_chars": {
     "description": "日记最大字数",
     "type": "int",
-    "slider": {"min": 100, "max": 2000, "step": 50},
+    "slider": {
+      "min": 100,
+      "max": 2000,
+      "step": 50
+    },
     "default": 600
   },
   "diary_input_max_chars": {
     "description": "每日回顾模型输入字符上限",
     "type": "int",
-    "slider": {"min": 500, "max": 10000, "step": 500},
+    "slider": {
+      "min": 500,
+      "max": 10000,
+      "step": 500
+    },
     "default": 4000
   },
   "diary_tail_messages": {
     "description": "每日回顾最多读取的未总结尾部消息数",
     "type": "int",
-    "slider": {"min": 0, "max": 30, "step": 1},
+    "slider": {
+      "min": 0,
+      "max": 30,
+      "step": 1
+    },
     "default": 12
   },
   "diary_retention_days": {
     "description": "日记保留天数",
     "type": "int",
-    "slider": {"min": 7, "max": 365, "step": 1},
+    "slider": {
+      "min": 7,
+      "max": 365,
+      "step": 1
+    },
     "default": 90
   },
   "daily_mood_palette": {
-    "description": "每日低权重心境词",
-    "hint": "仅作为日记模型的弱参考，不能编造经历，也不会直接覆盖权威心境。",
+    "description": "每日气质词池",
+    "hint": "每天按日期+会话确定性抽取一个当日基调，作为情绪基线偏移并写入日记。新增词若无对应偏移表则按零偏移处理。",
     "type": "list",
-    "default": ["平静", "轻快", "慵懒", "专注", "温柔", "内敛"]
+    "default": [
+      "平静",
+      "轻快",
+      "慵懒",
+      "专注",
+      "温柔",
+      "内敛",
+      "多愁善感",
+      "黏人",
+      "雀跃",
+      "安静"
+    ]
+  },
+  "circadian_enabled": {
+    "description": "启用昼夜节律（内源情绪）",
+    "hint": "夜间时段情绪基线自然向低落、低能量、略紧张方向偏移，白天回升；实现“到了晚上会 emo”。",
+    "type": "bool",
+    "default": true
+  },
+  "night_time_range": {
+    "description": "夜间时段范围",
+    "hint": "24 小时制 HH:MM-HH:MM，支持跨零点，例如 22:00-02:00。",
+    "type": "string",
+    "default": "22:00-02:00"
+  },
+  "night_melancholy_strength": {
+    "description": "夜间情绪偏移强度",
+    "hint": "0 表示无夜间偏移，1 为默认温和强度，最大 2；会再乘以敏感度中的依恋系数。",
+    "type": "float",
+    "slider": {
+      "min": 0,
+      "max": 2,
+      "step": 0.1
+    },
+    "default": 0.5
+  },
+  "night_missing_enabled": {
+    "description": "启用夜间想念",
+    "hint": "夜间超过阈值小时没有你的消息时，产生一条低强度“想念”心事，让情绪在深夜自然变化，也可能让主动对话更想找你。",
+    "type": "bool",
+    "default": true
+  },
+  "night_missing_after_hours": {
+    "description": "夜间想念触发静置时长（小时）",
+    "type": "float",
+    "slider": {
+      "min": 0.5,
+      "max": 8,
+      "step": 0.5
+    },
+    "default": 2.0
+  },
+  "daily_temperament_enabled": {
+    "description": "启用每日气质抽取",
+    "hint": "每天醒来从气质词池抽一个当日基调（种子确定性，重启不重抽），影响当天情绪基线；日记里也会体现。",
+    "type": "bool",
+    "default": true
+  },
+  "mood_drift_enabled": {
+    "description": "启用随机情绪漂移",
+    "hint": "情绪随时间做极小幅度的伪随机游走，偶尔“莫名有点丧/有点雀跃”，幅度有上限，不会翻转基调。",
+    "type": "bool",
+    "default": true
+  },
+  "mood_drift_amplitude": {
+    "description": "随机漂移幅度（每小时）",
+    "type": "float",
+    "slider": {
+      "min": 0,
+      "max": 0.15,
+      "step": 0.01
+    },
+    "default": 0.05
+  },
+  "transient_mood_half_life_minutes": {
+    "description": "瞬时情绪半衰期（分钟）",
+    "hint": "短期情绪偏移（被逗笑、短暂不快）回落到一半所需的时间；整体心境不受瞬时波动污染。",
+    "type": "float",
+    "slider": {
+      "min": 5,
+      "max": 60,
+      "step": 5
+    },
+    "default": 15
+  },
+  "sensitivity_overall": {
+    "description": "敏感度：全局乘数",
+    "hint": "所有情绪冲击的总开关，1 为默认；调低整体更钝感，调高更敏感。",
+    "type": "float",
+    "slider": {
+      "min": 0,
+      "max": 2,
+      "step": 0.1
+    },
+    "default": 1.0
+  },
+  "sensitivity_negative": {
+    "description": "敏感度：负向事件冲击",
+    "hint": "被骂、被冷落、委屈等负面事件对情绪的冲击强度；嫌他经常难过就调低。",
+    "type": "float",
+    "slider": {
+      "min": 0,
+      "max": 2,
+      "step": 0.1
+    },
+    "default": 1.0
+  },
+  "sensitivity_positive": {
+    "description": "敏感度：正向事件抬升",
+    "hint": "被夸、亲密互动、开心事对情绪的抬升强度。",
+    "type": "float",
+    "slider": {
+      "min": 0,
+      "max": 2,
+      "step": 0.1
+    },
+    "default": 1.0
+  },
+  "sensitivity_recovery": {
+    "description": "敏感度：情绪恢复速度",
+    "hint": "越大恢复越快（心事与心境的半衰期除以该值）；嫌他不开心过得慢就调高。",
+    "type": "float",
+    "slider": {
+      "min": 0.1,
+      "max": 2,
+      "step": 0.1
+    },
+    "default": 1.0
+  },
+  "sensitivity_attachment": {
+    "description": "敏感度：依恋强度",
+    "hint": "昼夜节律、夜间想念、被冷落等依恋类影响的强度；嫌他太黏人就调低。",
+    "type": "float",
+    "slider": {
+      "min": 0,
+      "max": 2,
+      "step": 0.1
+    },
+    "default": 1.0
+  },
+  "expression_guidance_enabled": {
+    "description": "启用回复建议（表达指导注入）",
+    "hint": "在情绪快照后追加“表达基调/可以流露/避免”建议块，由模型按当前情绪与具体心事异步生成并缓存，让聊天风格随心情变化。",
+    "type": "bool",
+    "default": true
+  },
+  "expression_guidance_when_needed": {
+    "description": "回复建议仅在必要时注入",
+    "hint": "开启后只有情绪明显偏离平静/温和愉快、或存在强化心事/吃醋/想念时才注入建议；平时完全不注入、不生成，按人格正常聊。",
+    "type": "bool",
+    "default": true
+  },
+  "expression_style_hint": {
+    "description": "人格情绪表达方式（可留空）",
+    "hint": "描述这个人表达各种情绪的习惯，生成建议时必须遵守。例如：难过时不会阴阳怪气，会变得安静、话变少，被问到才说原因；开心时话变多、喜欢用语气词；想念时会找借口发消息。",
+    "type": "string",
+    "max_length": 800,
+    "obvious_hint": true,
+    "editor_mode": true,
+    "default": ""
+  },
+  "expression_strength": {
+    "description": "回复建议注入强度",
+    "hint": "0 表示完全不注入建议块；0.1-0.5 只注入一行表达基调；0.7 以上注入完整建议（基调+可流露+避免）。",
+    "type": "float",
+    "slider": {
+      "min": 0,
+      "max": 2,
+      "step": 0.1
+    },
+    "default": 1.0
+  },
+  "guidance_provider_ids": {
+    "description": "表达建议模型链",
+    "hint": "生成回复建议使用的模型链。留空时自动跟随低频复核模型链，再留空使用当前会话模型；注意：单独填写后即为固定副本，以后修改低频复核链不会自动同步到此处。重试次数与单次超时没有单独设置，沿用下方「低频复核每模型最大重试次数」和「低频复核单次模型最大等待时间」。",
+    "type": "list",
+    "items": {
+      "type": "string"
+    },
+    "_special": "select_providers",
+    "default": []
+  },
+  "guidance_min_interval_minutes": {
+    "description": "表达建议最短刷新间隔（分钟）",
+    "hint": "情绪基调真的变化后，至少间隔这么久才再次生成建议；期间沿用上一份缓存，保证表达节奏像真人一样慢。",
+    "type": "int",
+    "slider": {
+      "min": 10,
+      "max": 480,
+      "step": 10
+    },
+    "default": 120
+  },
+  "guidance_max_chars": {
+    "description": "表达建议单条最大字数",
+    "type": "int",
+    "slider": {
+      "min": 80,
+      "max": 500,
+      "step": 20
+    },
+    "default": 200
+  },
+  "life_events_enabled": {
+    "description": "启用生活事件（挂心的事/想起的小事）",
+    "hint": "每天随机 1-N 个时刻，从长期记忆（为主）和知识库（为辅）取材，让模型生成一条符合角色生活的内心小事记为心事，之后可以在聊天中自然提起。",
+    "type": "bool",
+    "default": true
+  },
+  "life_events_per_day_max": {
+    "description": "每天生活事件上限",
+    "hint": "0 表示关闭生成；实际次数还会随机少于此上限。",
+    "type": "int",
+    "slider": {
+      "min": 0,
+      "max": 4,
+      "step": 1
+    },
+    "default": 2
+  },
+  "life_event_time_windows": {
+    "description": "生活事件生成时间窗",
+    "hint": "24 小时制 HH:MM-HH:MM，随机时刻只落在这个窗口内。",
+    "type": "string",
+    "default": "10:00-22:30"
+  },
+  "life_event_provider_ids": {
+    "description": "生活事件模型链",
+    "hint": "生成生活事件使用的模型链。留空时自动跟随低频复核模型链，再留空使用当前会话模型；单独填写后即为固定副本，修改低频复核链不会自动同步。重试次数与单次超时沿用「低频复核每模型最大重试次数」和「低频复核单次模型最大等待时间」。",
+    "type": "list",
+    "items": {
+      "type": "string"
+    },
+    "_special": "select_providers",
+    "default": []
+  },
+  "memory_retrieval_top_k": {
+    "description": "生活事件记忆检索条数",
+    "type": "int",
+    "slider": {
+      "min": 0,
+      "max": 12,
+      "step": 1
+    },
+    "default": 6
+  },
+  "life_event_kb_collection": {
+    "description": "生活事件知识库集合（可留空）",
+    "hint": "填写知识库插件里的「集合名称」（不是关键词，用 /kb 或 WebUI 可查看现有集合）。填写后生活事件会从该集合检索角色背景（家庭/学校/同学等）让事件更具体；留空则只用长期记忆取材。",
+    "type": "string",
+    "default": ""
+  },
+  "review_batch_messages": {
+    "description": "批量复核触发消息数",
+    "hint": "累计这么多条未复核消息后统一复核一次最近聊天；越大调用越少、分析上下文越完整。",
+    "type": "int",
+    "slider": {
+      "min": 3,
+      "max": 30,
+      "step": 1
+    },
+    "default": 10
+  },
+  "review_max_gap_minutes": {
+    "description": "批量复核最大间隔（分钟）",
+    "hint": "未复核消息不足批量条数、但距上次复核超过该时长且有新消息时，也会收尾复核一次（对话结束后的“回味”）。",
+    "type": "int",
+    "slider": {
+      "min": 5,
+      "max": 120,
+      "step": 5
+    },
+    "default": 30
   }
 }

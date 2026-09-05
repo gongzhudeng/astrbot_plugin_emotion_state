@@ -42,13 +42,13 @@ from astrbot_plugin_emotion_state.core.settlement import (
     archive_legacy_transient_events,
     decay_ledger,
     jealousy_evidence,
+    normalize_fact,
     select_injected_events,
     settle_intimacy,
     settle_jealousy,
     settle_mood_proposal,
     settle_proactive_evidence,
     settle_unanswered_proactive,
-    normalize_fact,
 )
 from astrbot_plugin_emotion_state.core.storage import LedgerStore
 
@@ -1604,14 +1604,20 @@ async def test_expired_attention_is_archived_on_service_settlement(tmp_path) -> 
     assert expired.completed_at == ""
     assert expired.archived_at == now.isoformat()
     assert expired.evidence[-1].kind == "archive_attention_expired"
-    assert next(item for item in settled.attention_items if item.id == "ongoing").status == "open"
+    assert (
+        next(item for item in settled.attention_items if item.id == "ongoing").status
+        == "open"
+    )
     audit = store.audit_file.read_text(encoding="utf-8")
     assert '"action": "archive_attention_expired"' in audit
 
     await service.settle_now(ledger.user_key, now=now)
-    assert store.audit_file.read_text(encoding="utf-8").count(
-        '"action": "archive_attention_expired"'
-    ) == 1
+    assert (
+        store.audit_file.read_text(encoding="utf-8").count(
+            '"action": "archive_attention_expired"'
+        )
+        == 1
+    )
 
 
 @pytest.mark.asyncio
@@ -1665,8 +1671,14 @@ async def test_attention_history_reconciliation_is_complete_only_and_idempotent(
         ],
     )
 
-    assert next(item for item in reconciled.attention_items if item.id == "photo").status == "completed"
-    assert next(item for item in reconciled.attention_items if item.id == "voice").status == "open"
+    assert (
+        next(item for item in reconciled.attention_items if item.id == "photo").status
+        == "completed"
+    )
+    assert (
+        next(item for item in reconciled.attention_items if item.id == "voice").status
+        == "open"
+    )
     assert "attention:history_reconciliation_complete_only" in reasons
     state_version = reconciled.state_version
 
@@ -1675,9 +1687,12 @@ async def test_attention_history_reconciliation_is_complete_only_and_idempotent(
     )
     assert repeated.state_version == state_version
     assert repeated_reasons == ["attention_history_already_reconciled"]
-    assert store.audit_file.read_text(encoding="utf-8").count(
-        '"action": "attention_history_reconciliation"'
-    ) == 1
+    assert (
+        store.audit_file.read_text(encoding="utf-8").count(
+            '"action": "attention_history_reconciliation"'
+        )
+        == 1
+    )
 
 
 def test_invalid_attention_action_is_rejected_before_ledger_mutation() -> None:
@@ -1812,7 +1827,9 @@ def test_model_injection_keeps_continuous_diagnostics_out_of_prompt() -> None:
 
     prompt = inject_prompt("persona", ledger)
 
-    assert "当前心境：平静" in prompt
+    # The injected mood line is recomputed from the raw axes, so valence 0.37
+    # reads as 温和愉快 instead of the stale default label.
+    assert "当前心境：温和愉快" in prompt
     assert "当前身体反应档位：强烈" in prompt
     assert "当前吃醋或在意的档位：中等" in prompt
     assert "当前倾向" not in prompt
@@ -1858,7 +1875,9 @@ def test_overlong_fact_is_bounded_at_readable_punctuation() -> None:
         lifecycle="active",
         confidence=0.9,
     )
-    prompt = inject_prompt("persona", StateLedger(user_key="private:bound", events=[event]))
+    prompt = inject_prompt(
+        "persona", StateLedger(user_key="private:bound", events=[event])
+    )
     injected_line = next(line for line in prompt.splitlines() if line.startswith("- "))
     assert "我当" not in injected_line
     assert "。…（对象：" in injected_line

@@ -692,9 +692,7 @@ async def test_attention_history_backfill_without_history_remains_retryable(
     plugin.context = SimpleNamespace(
         _livingmemory_get_attention_history=lambda *_args, **_kwargs: []
     )
-    monkeypatch.setattr(
-        "astrbot_plugin_emotion_state.main.asyncio.sleep", no_sleep
-    )
+    monkeypatch.setattr("astrbot_plugin_emotion_state.main.asyncio.sleep", no_sleep)
 
     await plugin._run_attention_history_backfill()
 

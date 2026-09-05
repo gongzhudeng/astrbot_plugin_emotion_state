@@ -7,8 +7,8 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from .models import EventObservation
-from .text_limits import EVENT_FACT_STORAGE_CHARS, bound_complete_text
 from .settlement import infer_attack_target, strip_media_context
+from .text_limits import EVENT_FACT_STORAGE_CHARS, bound_complete_text
 
 DEFAULT_RULES: list[dict[str, Any]] = [
     {
@@ -47,11 +47,38 @@ DEFAULT_RULES: list[dict[str, Any]] = [
         "meaning": "更像熟悉关系中的玩笑或撒娇，需要结合上下文",
     },
     {
+        # Only strong insults stay here; weaker disgust words belong to the
+        # disgust rule below. Abuse hits additionally require model review
+        # before they may become durable inner events.
         "id": "abuse",
-        "words": ["滚开", "去死", "恶心", "废物"],
+        "words": ["滚开", "去死", "废物", "傻逼"],
+        "exclude_words": [
+            "抖音",
+            "视频",
+            "链接",
+            "看到",
+            "刷到",
+            "新闻",
+            "帖子",
+            "评论",
+            "朋友圈",
+            "别人",
+            "网上",
+        ],
         "valence": -0.8,
         "intensity": 0.72,
-        "meaning": "可能构成真实攻击，需要结合对象和引用关系复核",
+        "meaning": "疑似真实攻击，必须经模型复核确认对象后才能形成心事",
+    },
+    {
+        # Disgust at external content (a video, a smell, a situation) is common
+        # in normal chat and must not be recorded as an attack on the bot.
+        "id": "disgust",
+        "words": ["恶心", "讨厌", "好烦", "真烦"],
+        "category": "transient",
+        "valence": -0.35,
+        "intensity": 0.3,
+        "confidence": 0.55,
+        "meaning": "对某事物或外部内容感到不适，一般不针对角色，不构成攻击",
     },
 ]
 
@@ -199,9 +226,11 @@ class LocalRuleEngine:
             configured_target = str(rule.get("target", "")).strip()
             target = configured_target or "user"
             target_basis = "configured_rule_target" if configured_target else ""
-            if rule["id"] == "abuse" and not configured_target:
+            if rule["id"] in {"abuse", "disgust"} and not configured_target:
+                # Hostility and disgust need an inferred subject; anything not
+                # clearly aimed at the bot stays a mild transient signal.
                 target, target_basis = infer_attack_target(semantic_text)
-                if target != "user":
+                if rule["id"] == "abuse" and target != "user":
                     category = "transient"
             observation = EventObservation(
                 action=str(rule.get("action", "create")),

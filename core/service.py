@@ -14,12 +14,16 @@ from .attention import (
     attention_observation_rejection,
     enforce_attention_capacity,
 )
+from .intrinsic import maybe_night_missing_observation
 from .models import (
     AttentionObservation,
     EventObservation,
     EventTrace,
+    IntrinsicParams,
     StateLedger,
+    clamp,
     iso_now,
+    utc_now,
 )
 from .settlement import (
     apply_observation,
@@ -46,13 +50,27 @@ class EmotionStateService:
         psychological_limit: int = 6,
         attention_limit: int = 8,
         episodic_limit: int = 6,
+        intrinsic_factory: Callable[[], IntrinsicParams | None] | None = None,
+        offset_half_life_minutes: float = 15.0,
     ) -> None:
         self.store = store
         self.half_life_hours = half_life_hours
         self.psychological_limit = max(1, int(psychological_limit))
         self.attention_limit = max(1, int(attention_limit))
         self.episodic_limit = max(1, int(episodic_limit))
+        # Optional factory producing the current intrinsic-dynamics snapshot;
+        # None keeps the legacy purely reactive behaviour (used by old tests).
+        self.intrinsic_factory = intrinsic_factory
+        self.offset_half_life_minutes = max(1.0, float(offset_half_life_minutes))
         self._locks: dict[str, asyncio.Lock] = {}
+
+    def _intrinsic(self) -> IntrinsicParams | None:
+        if self.intrinsic_factory is None:
+            return None
+        try:
+            return self.intrinsic_factory()
+        except Exception:
+            return None
 
     def _enforce_capacities(
         self,
@@ -104,8 +122,30 @@ class EmotionStateService:
         async with self._lock_for(user_key):
             ledger = await asyncio.to_thread(self.store.load, user_key)
             updated = ledger
+            intrinsic = self._intrinsic()
             if settle:
-                updated = decay_ledger(updated, half_life_hours=self.half_life_hours)
+                updated = decay_ledger(
+                    updated,
+                    half_life_hours=self.half_life_hours,
+                    intrinsic=intrinsic,
+                    offset_half_life_minutes=self.offset_half_life_minutes,
+                )
+                if intrinsic is not None:
+                    observation = maybe_night_missing_observation(
+                        updated, utc_now(), intrinsic
+                    )
+                    if observation is not None:
+                        updated, applied, _ = apply_observation(updated, observation)
+                        if applied:
+                            await asyncio.to_thread(
+                                self.store.append_audit,
+                                user_key,
+                                "night_missing_event",
+                                {
+                                    "state_version": updated.state_version,
+                                    "note": observation.note,
+                                },
+                            )
             updated, capacity_reasons, expired_attention_ids = self._enforce_capacities(
                 updated
             )
@@ -121,9 +161,7 @@ class EmotionStateService:
                         "state_version": updated.state_version,
                     },
                 )
-            await self._append_expiry_audit(
-                user_key, updated, expired_attention_ids
-            )
+            await self._append_expiry_audit(user_key, updated, expired_attention_ids)
             return updated
 
     async def get_review_context(self, user_key: str) -> dict[str, Any]:
@@ -367,9 +405,7 @@ class EmotionStateService:
                     "state_version": updated.state_version,
                 },
             )
-            await self._append_expiry_audit(
-                user_key, updated, expired_attention_ids
-            )
+            await self._append_expiry_audit(user_key, updated, expired_attention_ids)
             return updated, reasons
 
     async def reconcile_attention_history(
@@ -398,7 +434,9 @@ class EmotionStateService:
                 if rejection:
                     reasons.append(f"attention:{rejection}")
                     continue
-                updated, applied, reason = apply_attention_observation(updated, observation)
+                updated, applied, reason = apply_attention_observation(
+                    updated, observation
+                )
                 reasons.append(f"attention:{reason}")
                 applied_count += int(applied)
 
@@ -424,9 +462,7 @@ class EmotionStateService:
                     "state_version": updated.state_version,
                 },
             )
-            await self._append_expiry_audit(
-                user_key, updated, expired_attention_ids
-            )
+            await self._append_expiry_audit(user_key, updated, expired_attention_ids)
             return updated, reasons
 
     async def advance_watermark(self, user_key: str) -> StateLedger:
@@ -434,6 +470,7 @@ class EmotionStateService:
         async with self._lock_for(user_key):
             ledger = await asyncio.to_thread(self.store.load, user_key)
             ledger.message_watermark += 1
+            ledger.last_user_message_ts = utc_now().timestamp()
             ledger, capacity_reasons, expired_attention_ids = self._enforce_capacities(
                 ledger
             )
@@ -449,9 +486,7 @@ class EmotionStateService:
                         "state_version": ledger.state_version,
                     },
                 )
-            await self._append_expiry_audit(
-                user_key, ledger, expired_attention_ids
-            )
+            await self._append_expiry_audit(user_key, ledger, expired_attention_ids)
             return ledger
 
     async def delete_item(
@@ -554,7 +589,23 @@ class EmotionStateService:
     ) -> tuple[StateLedger, bool, str]:
         async with self._lock_for(user_key):
             ledger = await asyncio.to_thread(self.store.load, user_key)
-            ledger = decay_ledger(ledger, half_life_hours=self.half_life_hours)
+            intrinsic = self._intrinsic()
+            ledger = decay_ledger(
+                ledger,
+                half_life_hours=self.half_life_hours,
+                intrinsic=intrinsic,
+                offset_half_life_minutes=self.offset_half_life_minutes,
+            )
+            if intrinsic is not None:
+                # Sensitivity multipliers scale how hard one piece of evidence hits.
+                sensitivity = intrinsic.sensitivity
+                scaled = clamp(
+                    observation.intensity
+                    * sensitivity.direction_factor(observation.valence)
+                    * sensitivity.overall
+                )
+                if abs(scaled - observation.intensity) > 1e-6:
+                    observation = replace(observation, intensity=clamp(scaled))
             updated, applied, reason = apply_observation(ledger, observation)
             capacity_reasons: list[str] = []
             if applied:
@@ -578,6 +629,19 @@ class EmotionStateService:
                 )
                 await self._append_expiry_audit(
                     user_key, updated, expired_attention_ids
+                )
+            else:
+                # Rejections used to be silent, which made misjudgments hard to audit.
+                await asyncio.to_thread(
+                    self.store.append_audit,
+                    user_key,
+                    "event_observation_rejected",
+                    {
+                        "action": observation.action,
+                        "source": observation.source,
+                        "reason": reason,
+                        "state_version": ledger.state_version,
+                    },
                 )
             return updated, applied, reason
 
@@ -643,9 +707,7 @@ class EmotionStateService:
                 action,
                 detail or {"state_version": updated.state_version},
             )
-            await self._append_expiry_audit(
-                user_key, updated, expired_attention_ids
-            )
+            await self._append_expiry_audit(user_key, updated, expired_attention_ids)
             return updated
 
     async def mutate_if_changed(
@@ -677,9 +739,7 @@ class EmotionStateService:
                 action,
                 detail or {"state_version": updated.state_version},
             )
-            await self._append_expiry_audit(
-                user_key, updated, expired_attention_ids
-            )
+            await self._append_expiry_audit(user_key, updated, expired_attention_ids)
             return updated, True
 
     async def settle_now(
@@ -688,7 +748,11 @@ class EmotionStateService:
         async with self._lock_for(user_key):
             ledger = await asyncio.to_thread(self.store.load, user_key)
             updated = decay_ledger(
-                ledger, now=now, half_life_hours=self.half_life_hours
+                ledger,
+                now=now,
+                half_life_hours=self.half_life_hours,
+                intrinsic=self._intrinsic(),
+                offset_half_life_minutes=self.offset_half_life_minutes,
             )
             updated, capacity_reasons, expired_attention_ids = self._enforce_capacities(
                 updated, now=now
@@ -704,7 +768,5 @@ class EmotionStateService:
                         "state_version": updated.state_version,
                     },
                 )
-            await self._append_expiry_audit(
-                user_key, updated, expired_attention_ids
-            )
+            await self._append_expiry_audit(user_key, updated, expired_attention_ids)
             return updated

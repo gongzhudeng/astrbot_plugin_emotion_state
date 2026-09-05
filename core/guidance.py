@@ -106,7 +106,9 @@ def guidance_regime(
     return "|".join(
         [
             effective.label,
-            time_band(current),
+            # No time band here on purpose: the clock alone must never trigger a
+            # regeneration. Only a real state change (label, new top event,
+            # jealousy/missing, temperament rollover) refreshes the suggestion.
             ledger.today_temperament.word,
             top_event.id if top_event else "",
             jealousy_tier,

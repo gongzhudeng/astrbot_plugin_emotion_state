@@ -347,9 +347,17 @@ def test_needs_guidance_gate() -> None:
     assert needs_guidance(intensified)
 
 
-def test_guidance_regime_changes_with_state_and_time_band() -> None:
+def test_guidance_regime_changes_with_state_not_clock() -> None:
     ledger = _sad_ledger()
     base = guidance_regime(ledger)
+
+    # Crossing a time band with identical state must NOT change the regime.
+    now = datetime.now().astimezone()
+    assert guidance_regime(ledger, now=now.replace(hour=10)) == guidance_regime(
+        ledger, now=now.replace(hour=23)
+    )
+
+    # Reaching a different emotional state does change it.
     ledger.mood.valence = 0.4
     ledger.mood.label = "温和愉快"
     assert guidance_regime(ledger) != base

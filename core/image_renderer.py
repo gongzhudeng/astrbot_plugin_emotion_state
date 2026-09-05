@@ -41,6 +41,7 @@ class EmotionStateImageRenderer:
         body_stage: str,
         now: datetime,
         mode: object = "自动",
+        guidance: dict[str, str] | None = None,
     ) -> bytes:
         """Render the mood sheet as encoded PNG bytes.
 
@@ -51,12 +52,15 @@ class EmotionStateImageRenderer:
             body_stage: Raw body reaction stage label.
             now: Current local time used for highlighting and theme selection.
             mode: Automatic, light, or dark display mode.
+            guidance: Cached reply suggestion (tone/can_say/avoid) or None.
 
         Returns:
             Encoded RGB PNG bytes.
         """
         theme = self.resolve_theme(mode, now)
-        return self._render(ledger, events, attention_items, body_stage, now, theme)
+        return self._render(
+            ledger, events, attention_items, body_stage, now, theme, guidance
+        )
 
     # -- palette -----------------------------------------------------------
     @staticmethod
@@ -194,6 +198,27 @@ class EmotionStateImageRenderer:
         lines = cv.wrap(item.content, content_f, 760)
         return lines, 104 + len(lines) * 36
 
+    def _guidance_metrics(self, cv: Canvas, guidance: dict[str, str]):
+        """Measure the reply-suggestion card: (rows, card_height).
+
+        Mirrors ``_draw_guidance`` exactly: label line (28) + one wrapped text
+        block per present field, then card padding.
+        """
+        body_f = font(23, 450)
+        rows: list[tuple[str, list[str]]] = []
+        for label, text in (
+            ("表达基调", guidance.get("tone", "")),
+            ("可以流露", guidance.get("can_say", "")),
+            ("避免", guidance.get("avoid", "")),
+        ):
+            clean = str(text or "").strip()
+            if clean:
+                rows.append((label, cv.wrap(clean, body_f, 780)))
+        height = 92 + 8
+        for _, lines in rows:
+            height += 28 + len(lines) * 34 + 16
+        return rows, height
+
     # -- sections ---------------------------------------------------------------
     def _draw_header(self, cv: Canvas, pal, now: datetime):
         ink, sub, rose = pal["ink"], pal["sub"], pal["rose"]
@@ -232,6 +257,19 @@ class EmotionStateImageRenderer:
         cv.text(200, top + 176, "情绪数值", font(16, 450), sub, anchor="ma")
         cv.text(372, top + 46, "此刻的心境", font(18, 450), sub)
         cv.text(372, top + 78, ledger.mood.label or "平静", font(46, 800), ink)
+        temperament = ledger.today_temperament.word
+        if temperament:
+            cv.pill(
+                988,
+                top + 40,
+                f"今日气质 · {temperament}",
+                font(16, 600),
+                pal["mint"],
+                c(pal["mint"], 40),
+                padx=13,
+                pady=7,
+                anchor="ra",
+            )
         values = [
             ("情绪偏向", abs(valence), disp, rose),
             (
@@ -398,6 +436,29 @@ class EmotionStateImageRenderer:
             y += card_h + 20
         return y
 
+    def _draw_guidance(self, cv: Canvas, y, guidance: dict[str, str], pal):
+        """Draw the reply-suggestion card; layout must match ``_guidance_metrics``."""
+        ink = pal["ink"]
+        gold, mint, rose = pal["gold"], pal["mint"], pal["rose"]
+        y = self._draw_section_head(cv, y, "此刻的表达建议", "1 条", gold, pal)
+        rows, card_h = self._guidance_metrics(cv, guidance)
+        self._card(cv, (58, y, 1022, y + card_h), pal, radius=26)
+        cv.star4(122, y + 52, 11, c(gold, 210))
+        cv.text(152, y + 38, "回复建议 · 下一次回复的语气参考", font(25, 700), ink)
+        colors = {"表达基调": gold, "可以流露": mint, "避免": rose}
+        body_f, label_f = font(23, 450), font(16, 600)
+        ly = y + 92
+        for label, lines in rows:
+            col = colors.get(label, gold)
+            cv.rrect((166, ly + 5, 171, ly + 25), 2, fill=c(col))
+            cv.text(184, ly, label, label_f, col)
+            ly += 28
+            for line in lines:
+                cv.text(184, ly, line, body_f, ink)
+                ly += 34
+            ly += 16
+        return y + card_h
+
     # -- entry -------------------------------------------------------------------
     def _render(
         self,
@@ -407,6 +468,7 @@ class EmotionStateImageRenderer:
         body_stage: str,
         now: datetime,
         theme: str,
+        guidance: dict[str, str] | None = None,
     ) -> bytes:
         pal = self._palette(theme)
         sub = pal["sub"]
@@ -426,12 +488,21 @@ class EmotionStateImageRenderer:
         att_section_h = 56 + sum(att_hs)
         if not attention_items:
             att_section_h = 56 + 114
+        guide_section_h = 0
+        if guidance:
+            _, guide_card_h = self._guidance_metrics(probe, guidance)
+            guide_section_h = 56 + guide_card_h + 24
 
         mood_top = 340
         body_top = mood_top + 300 + 32
         events_top = body_top + 104 + 50
         att_top = events_top + event_section_h + 16
-        yf = att_top + att_section_h + 32
+        guide_top = att_top + att_section_h + 16
+        yf = (
+            guide_top + guide_section_h + 32
+            if guidance
+            else att_top + att_section_h + 32
+        )
 
         cv = Canvas(
             height=int(yf + 52) + 40, bg="#FDEEF3" if theme == "day" else "#1E1420"
@@ -445,6 +516,8 @@ class EmotionStateImageRenderer:
         self._draw_body(cv, body_top, ledger, body_stage, pal)
         y = self._draw_events(cv, events_top, events, pal, now)
         y = self._draw_attention(cv, y + 16, attention_items, pal)
+        if guidance:
+            y = self._draw_guidance(cv, y + 16, guidance, pal)
 
         ft = font(16, 500)
         total = cv.spaced(540, yf, "LINGXI · INNER WORLD", ft, sub, 5, anchor="ma")

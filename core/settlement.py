@@ -8,12 +8,20 @@ import re
 from datetime import datetime
 
 from .intimacy import body_reaction_stage
+from .intrinsic import (
+    decay_mood_offset,
+    drift_target,
+    ensure_temperament,
+    intrinsic_baseline_shift,
+)
 from .models import (
     EventObservation,
     EventTrace,
     InnerEvent,
+    IntrinsicParams,
     MoodState,
     ProactiveEvidenceProgress,
+    SensitivityParams,
     StateLedger,
     clamp,
     iso_now,
@@ -215,11 +223,19 @@ def decay_ledger(
     ledger: StateLedger,
     now: datetime | None = None,
     half_life_hours: float = 72.0,
+    *,
+    intrinsic: IntrinsicParams | None = None,
+    offset_half_life_minutes: float = 15.0,
 ) -> StateLedger:
     current_time = now or utc_now()
     updated = _copy_ledger(ledger)
     changed = False
     half_life = max(1.0, float(half_life_hours))
+    mood_relax_hours = 8.0
+    if intrinsic is not None:
+        half_life = max(1.0, half_life / intrinsic.sensitivity.recovery)
+        mood_relax_hours = max(1.0, mood_relax_hours / intrinsic.sensitivity.recovery)
+        changed = ensure_temperament(updated, current_time, intrinsic) or changed
     last_settled = parse_time(updated.last_settled_at)
     elapsed_hours = max(0.0, (current_time - last_settled).total_seconds() / 3600)
     if elapsed_hours < 0.01:
@@ -259,26 +275,41 @@ def decay_ledger(
         jealousy.updated_at = current_time.isoformat()
         changed = True
 
+    changed = (
+        decay_mood_offset(updated, elapsed_hours, offset_half_life_minutes) or changed
+    )
+
     baseline_mood = derive_mood(updated.events, previous=MoodState())
-    mood_factor = math.pow(0.5, elapsed_hours / 8.0)
+    if intrinsic is not None:
+        shift_v, shift_e, shift_t = intrinsic_baseline_shift(
+            updated, current_time, intrinsic
+        )
+        drift_v, drift_e, drift_t = drift_target(
+            updated.user_key, current_time, intrinsic.drift_amplitude
+        )
+        target_valence = clamp(baseline_mood.valence + shift_v + drift_v, -1.0, 1.0)
+        target_energy = clamp(baseline_mood.energy + shift_e + drift_e)
+        target_tension = clamp(baseline_mood.tension + shift_t + drift_t)
+    else:
+        target_valence = baseline_mood.valence
+        target_energy = baseline_mood.energy
+        target_tension = baseline_mood.tension
+    mood_factor = math.pow(0.5, elapsed_hours / mood_relax_hours)
     old_mood = (
         updated.mood.valence,
         updated.mood.energy,
         updated.mood.tension,
     )
     updated.mood.valence = clamp(
-        baseline_mood.valence
-        + (updated.mood.valence - baseline_mood.valence) * mood_factor,
+        target_valence + (updated.mood.valence - target_valence) * mood_factor,
         -1.0,
         1.0,
     )
     updated.mood.energy = clamp(
-        baseline_mood.energy
-        + (updated.mood.energy - baseline_mood.energy) * mood_factor
+        target_energy + (updated.mood.energy - target_energy) * mood_factor
     )
     updated.mood.tension = clamp(
-        baseline_mood.tension
-        + (updated.mood.tension - baseline_mood.tension) * mood_factor
+        target_tension + (updated.mood.tension - target_tension) * mood_factor
     )
     if old_mood != (
         updated.mood.valence,
@@ -286,7 +317,12 @@ def decay_ledger(
         updated.mood.tension,
     ):
         updated.mood.label = mood_label(
-            updated.mood.valence, updated.mood.tension, updated.mood.energy
+            updated.mood.valence,
+            updated.mood.tension,
+            updated.mood.energy,
+            hour=current_time.astimezone().hour if intrinsic is not None else None,
+            night_hours=intrinsic.night_hours if intrinsic is not None else (),
+            interpersonal_unresolved=interpersonal_unresolved(updated),
         )
         updated.mood.updated_at = current_time.isoformat()
         changed = True
@@ -344,30 +380,38 @@ def derive_mood(
 def settle_transient_mood(
     ledger: StateLedger,
     signals: list[EventObservation],
+    *,
+    sensitivity: SensitivityParams | None = None,
 ) -> StateLedger:
-    """Blend bounded short-lived signals without creating durable events."""
+    """Blend bounded short-lived signals into the fast offset, not the baseline.
+
+    The offset decays to zero within minutes (see decay_mood_offset), so a brief
+    laugh never drags the whole-day mood away from its settled baseline.
+    """
     if not signals:
         return _copy_ledger(ledger)
     updated = _copy_ledger(ledger)
     strongest = max(signals, key=lambda item: item.intensity * item.confidence)
     weight = min(0.22, strongest.intensity * strongest.confidence * 0.28)
-    updated.mood.valence = clamp(
-        updated.mood.valence * (1.0 - weight) + strongest.valence * weight,
-        -1.0,
-        1.0,
+    if sensitivity is not None:
+        weight *= clamp(
+            sensitivity.direction_factor(strongest.valence) * sensitivity.overall,
+            0.0,
+            2.0,
+        )
+        weight = min(0.35, weight)
+    offset = updated.mood_offset
+    offset.valence = clamp(offset.valence + strongest.valence * weight, -0.35, 0.35)
+    offset.energy = clamp(
+        offset.energy + abs(strongest.valence) * weight * 0.2, -0.35, 0.35
     )
-    updated.mood.energy = clamp(
-        updated.mood.energy + abs(strongest.valence) * weight * 0.2
+    offset.tension = clamp(
+        offset.tension
+        + (-strongest.valence if strongest.valence < 0 else -0.1) * weight,
+        -0.35,
+        0.35,
     )
-    updated.mood.tension = clamp(
-        updated.mood.tension
-        + (-strongest.valence if strongest.valence < 0 else -0.1) * weight
-    )
-    updated.mood.label = mood_label(
-        updated.mood.valence, updated.mood.tension, updated.mood.energy
-    )
-    updated.mood.updated_at = iso_now()
-    updated.mood.confidence = clamp(updated.mood.confidence * 0.85 + 0.1)
+    offset.updated_at = iso_now()
     updated.state_version += 1
     updated.updated_at = iso_now()
     return updated
@@ -448,20 +492,105 @@ def settle_jealousy(
     return updated
 
 
-def mood_label(valence: float, tension: float, energy: float) -> str:
+def mood_label(
+    valence: float,
+    tension: float,
+    energy: float,
+    *,
+    hour: int | None = None,
+    night_hours: tuple[int, ...] | frozenset[int] = (),
+    interpersonal_unresolved: bool = False,
+) -> str:
     if tension >= 0.68 and valence < -0.2:
         return "紧绷难受"
-    if valence <= -0.55:
+    if tension >= 0.5 and valence <= -0.18 and interpersonal_unresolved:
+        return "委屈"
+    if valence <= -0.45:
         return "低落"
+    if (
+        hour is not None
+        and night_hours
+        and int(hour) in night_hours
+        and -0.45 < valence < 0
+    ):
+        return "夜晚感伤"
     if valence <= -0.18:
         return "有些在意"
-    if valence >= 0.58 and energy >= 0.55:
+    if valence >= 0.6 and energy >= 0.6:
+        return "雀跃"
+    if valence >= 0.5 and energy >= 0.5:
         return "明快开心"
     if valence >= 0.2:
         return "温和愉快"
     if tension >= 0.48:
         return "略有不安"
     return "平静"
+
+
+def interpersonal_unresolved(ledger: StateLedger) -> bool:
+    """True when a user-directed event is still open (drives the 委屈 label)."""
+    return any(
+        event.target == "user"
+        and event.valence < 0
+        and event.unresolved
+        and event.lifecycle in {"active", "intensified"}
+        for event in ledger.events
+    )
+
+
+def effective_mood(
+    ledger: StateLedger,
+    *,
+    hour: int | None = None,
+    night_hours: tuple[int, ...] | frozenset[int] = (),
+) -> MoodState:
+    """Baseline mood plus the fast-decaying short-term offset (expression view)."""
+    offset = ledger.mood_offset
+    valence = clamp(ledger.mood.valence + offset.valence, -1.0, 1.0)
+    energy = clamp(ledger.mood.energy + offset.energy)
+    tension = clamp(ledger.mood.tension + offset.tension)
+    label = mood_label(
+        valence,
+        tension,
+        energy,
+        hour=hour,
+        night_hours=night_hours,
+        interpersonal_unresolved=interpersonal_unresolved(ledger),
+    )
+    return MoodState(
+        valence=valence,
+        energy=energy,
+        tension=tension,
+        label=label,
+        updated_at=ledger.mood.updated_at,
+        confidence=ledger.mood.confidence,
+    )
+
+
+def mood_narrative(
+    ledger: StateLedger,
+    *,
+    hour: int | None = None,
+    night_hours: tuple[int, ...] | frozenset[int] = (),
+) -> str:
+    """Compose the single-line dual-layer mood narrative for prompt injection."""
+    effective = effective_mood(ledger, hour=hour, night_hours=night_hours)
+    if ledger.mood_offset.significant:
+        reason = next(
+            (
+                event.fact
+                for event in ledger.events
+                if event.lifecycle in {"active", "intensified"}
+                and event.category != "transient"
+            ),
+            "",
+        )
+        reason_text = f"（因为{reason[:60]}）" if reason else ""
+        return (
+            f"整体：{ledger.mood.label}{reason_text}；"
+            f"刚刚：{effective.label}（暂时性的，很快会过去）"
+        )
+    return f"当前心境：{effective.label}"
 
 
 def event_score(event: InnerEvent, now: datetime | None = None) -> float:
@@ -491,7 +620,9 @@ def is_attack_like(fact: str, tags: list[str] | None = None) -> bool:
     tag_set = {str(tag).strip().lower() for tag in (tags or [])}
     return bool(
         tag_set & {"abuse", "attack", "insult", "negative_attack"}
-        or re.search(r"恶心|滚开|去死|废物|臭烘烘|臭死|烦死|讨厌", clean)
+        # Bare disgust words (恶心/讨厌) no longer count: they mostly describe
+        # external content, not an attack on the bot. See the disgust rule.
+        or re.search(r"滚开|滚|去死|废物|傻逼|臭烘烘|臭死|烦死|闭嘴", clean)
     )
 
 
@@ -511,8 +642,12 @@ def infer_attack_target(fact: str, evidence_quote: str = "") -> tuple[str, str]:
     )
     if third_party.search(clean):
         return "third_party", "explicit_third_party_subject"
+    # A bare "你" is not evidence of an attack (e.g. "你能按她这样拍一张我看不").
+    # Require the attack word to sit in the same clause right after "你".
     if re.search(
-        r"(?:^|[\s，。！？!?；;])你(?:这个|这|真|太|好|怎么|可真|真的)?", clean
+        r"(?:^|[\s，。！？!?；;])你[^。！？!?；;]{0,10}?"
+        r"(?:滚|去死|废物|傻逼|臭|恶心|烦死|闭嘴|讨厌)",
+        clean,
     ):
         return "user", "explicit_user_subject"
     return "unknown", "no_explicit_subject"

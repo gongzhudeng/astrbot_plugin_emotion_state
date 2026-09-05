@@ -70,6 +70,7 @@ def build_daily_prompt(
     payload = {
         "cycle_date": cycle_date,
         "previous_mood": ledger.mood.label,
+        "today_temperament": ledger.today_temperament.word,
         "inner_events": _event_view(ledger),
         "memory_context": memory_context or {},
         "schedule_facts": schedule_facts or {},

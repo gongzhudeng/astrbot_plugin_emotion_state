@@ -57,9 +57,7 @@ _MEDIA_ITEM_CUES = {
     "视频": re.compile(r"(?:视频|录像|录屏)"),
     "文件": re.compile(r"(?:文件|文档|附件|资料)"),
 }
-_ONGOING_ATTENTION_CUES = re.compile(
-    r"(?:以后|每次|每天|每晚|长期|一直|持续|不能忘)"
-)
+_ONGOING_ATTENTION_CUES = re.compile(r"(?:以后|每次|每天|每晚|长期|一直|持续|不能忘)")
 
 
 def normalize_attention_content(value: str, limit: int = 240) -> str:

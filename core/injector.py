@@ -4,15 +4,21 @@ from __future__ import annotations
 
 import re
 from dataclasses import asdict, dataclass
+from datetime import datetime
 
 from .attention import (
     attention_kind_label,
     is_attention_overdue,
     select_attention_items,
 )
+from .guidance import format_guidance_block, needs_guidance
 from .models import StateLedger, iso_now
 from .presentation import intimacy_prompt_text
-from .settlement import normalize_fact, select_injected_events
+from .settlement import (
+    mood_narrative,
+    normalize_fact,
+    select_injected_events,
+)
 from .text_limits import EVENT_FACT_INJECTION_CHARS
 
 ANCHOR = "<!-- EMOTION_STATE_ANCHOR -->"
@@ -23,7 +29,19 @@ DEFAULT_RULES_TEXT = """这是角色当前的连续内心状态与待关注事�
 不要机械复述、过度推断或编造事实；第三方或未明确对象不得改写成用户事件。
 待确认提议不是既成约定，不要擅自宣称已完成、取消或兑现；身体反应按当前档位表达，不要夸大。"""
 
-FIXED_RULES = f"<emotion_state_rules>\n{DEFAULT_RULES_TEXT}\n</emotion_state_rules>"
+
+@dataclass(frozen=True, slots=True)
+class InjectionOptions:
+    """Per-request injection switches resolved from plugin configuration."""
+
+    night_hours: tuple[int, ...] = ()
+    guidance_enabled: bool = True
+    guidance_when_needed: bool = True
+    guidance_strength: float = 1.0
+    now: datetime | None = None
+
+    def current_time(self) -> datetime:
+        return self.now or datetime.now().astimezone()
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,41 +118,63 @@ def build_snapshot(
     ledger: StateLedger,
     max_events: int = 2,
     max_attention_items: int = 2,
+    *,
+    options: InjectionOptions | None = None,
 ) -> str:
+    opts = options or InjectionOptions()
     selected = select_injected_events(ledger.events, max_events)
     attention_items = select_attention_items(
         ledger.attention_items, max_attention_items
     )
+    now = opts.current_time()
     lines = [
         "<emotion_state_snapshot>",
-        f"当前心境：{ledger.mood.label}。",
+        mood_narrative(
+            ledger,
+            hour=now.astimezone().hour,
+            night_hours=opts.night_hours,
+        ),
     ]
-    if selected:
-        lines.append("当前仍有影响的事情：")
-        for event in selected:
-            fact = normalize_fact(event.fact, EVENT_FACT_INJECTION_CHARS)
-            meaning = normalize_fact(event.emotional_meaning, 140)
-            target_label = {
-                "user": "当前聊天对象",
-                "third_party": "第三方",
-                "unknown": "对象未明确",
-            }.get(str(event.target).strip().lower(), "其他对象")
-            lines.append(f"- {fact}（对象：{target_label}；{meaning}）")
-    else:
-        lines.append("当前没有足够确定、需要特别带入的具体事情。")
-    if attention_items:
-        lines.append("仍需留意或接续的事项：")
-        for item in attention_items:
-            status = "待双方确认" if item.status == "proposed" else "仍待关注"
-            timing = item.time_hint or item.due_at
-            overdue = "，时间已到但尚无完成证据" if is_attention_overdue(item) else ""
-            suffix = f"，时间提示：{timing}" if timing else ""
+    if max_events > 0:
+        if selected:
+            lines.append("当前仍有影响的事情：")
+            for event in selected:
+                fact = normalize_fact(event.fact, EVENT_FACT_INJECTION_CHARS)
+                meaning = normalize_fact(event.emotional_meaning, 140)
+                target_label = {
+                    "user": "当前聊天对象",
+                    "third_party": "第三方",
+                    "unknown": "对象未明确",
+                }.get(str(event.target).strip().lower(), "其他对象")
+                lines.append(f"- {fact}（对象：{target_label}；{meaning}）")
+        else:
+            lines.append("当前没有足够确定、需要特别带入的具体事情。")
+    if max_attention_items > 0:
+        if attention_items:
+            lines.append("仍需留意或接续的事项：")
+            for item in attention_items:
+                status = "待双方确认" if item.status == "proposed" else "仍待关注"
+                timing = item.time_hint or item.due_at
+                overdue = (
+                    "，时间已到但尚无完成证据" if is_attention_overdue(item) else ""
+                )
+                suffix = f"，时间提示：{timing}" if timing else ""
+                lines.append(
+                    f"- [{attention_kind_label(item.kind)}；{status}] "
+                    f"{normalize_fact(item.content, 180)}{suffix}{overdue}"
+                )
+        else:
+            lines.append("当前没有仍需留意或接续的事项。")
+    if opts.night_hours and now.astimezone().hour in opts.night_hours:
+        missing_active = any(
+            event.source == "night_missing"
+            and event.lifecycle in {"active", "intensified"}
+            for event in ledger.events
+        )
+        if missing_active:
             lines.append(
-                f"- [{attention_kind_label(item.kind)}；{status}] "
-                f"{normalize_fact(item.content, 180)}{suffix}{overdue}"
+                "现在是深夜，他很久没来了，你有点想念他；如果主动找他，语气可以更黏人、更想他。"
             )
-    else:
-        lines.append("当前没有仍需留意或接续的事项。")
     if ledger.jealousy.intensity >= 0.08 and ledger.jealousy.confidence >= 0.55:
         jealousy_tier = (
             "明显"
@@ -157,16 +197,40 @@ def build_injection_content(
     max_events: int = 2,
     max_attention_items: int = 2,
     rules_text: str | None = None,
+    *,
+    options: InjectionOptions | None = None,
 ) -> str:
+    opts = options or InjectionOptions()
+    parts: list[str] = []
     configured = str(rules_text or "").strip()
     if configured:
         # Accepting the complete tagged form makes manual configuration forgiving.
         configured = re.sub(r"^<emotion_state_rules>\s*", "", configured)
         configured = re.sub(r"\s*</emotion_state_rules>$", "", configured).strip()
-        rules = f"<emotion_state_rules>\n{configured}\n</emotion_state_rules>"
-    else:
-        rules = FIXED_RULES
-    return f"{rules}\n{build_snapshot(ledger, max_events, max_attention_items)}"
+        # An empty configured text means the rules block is omitted entirely.
+        if configured:
+            parts.append(f"<emotion_state_rules>\n{configured}\n</emotion_state_rules>")
+    parts.append(build_snapshot(ledger, max_events, max_attention_items, options=opts))
+    if opts.guidance_enabled:
+        guidance = ledger.expression_guidance
+        if guidance is not None:
+            gate_open = not opts.guidance_when_needed or needs_guidance(
+                ledger,
+                night_hours=opts.night_hours,
+                now=opts.current_time(),
+            )
+            if gate_open:
+                block = format_guidance_block(
+                    {
+                        "tone": guidance.tone,
+                        "can_say": guidance.can_say,
+                        "avoid": guidance.avoid,
+                    },
+                    strength=opts.guidance_strength,
+                )
+                if block:
+                    parts.append(block)
+    return "\n".join(parts)
 
 
 def inject_prompt(
@@ -175,10 +239,12 @@ def inject_prompt(
     max_events: int = 2,
     max_attention_items: int = 2,
     rules_text: str | None = None,
+    *,
+    options: InjectionOptions | None = None,
 ) -> str:
     return _replace_block(
         prompt or "",
         build_injection_content(
-            ledger, max_events, max_attention_items, rules_text
+            ledger, max_events, max_attention_items, rules_text, options=options
         ),
     )

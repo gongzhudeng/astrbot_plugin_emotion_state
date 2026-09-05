@@ -377,6 +377,88 @@ class ProactiveEvidenceProgress:
 
 
 @dataclass(slots=True)
+class MoodOffsetState:
+    """Fast-decaying short-term mood offset layered on top of the settled baseline.
+
+    Transient reactions (being teased into a laugh, a brief annoyance) land here
+    instead of polluting the slow baseline mood; it decays to zero within minutes.
+    """
+
+    valence: float = 0.0
+    energy: float = 0.0
+    tension: float = 0.0
+    updated_at: str = field(default_factory=iso_now)
+
+    def __post_init__(self) -> None:
+        self.valence = clamp(self.valence, -0.35, 0.35)
+        self.energy = clamp(self.energy, -0.35, 0.35)
+        self.tension = clamp(self.tension, -0.35, 0.35)
+
+    @property
+    def significant(self) -> bool:
+        return abs(self.valence) >= 0.08 or abs(self.tension) >= 0.08
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> MoodOffsetState:
+        return cls(
+            **{key: data[key] for key in cls.__dataclass_fields__ if key in data}
+        )
+
+
+@dataclass(slots=True)
+class TemperamentState:
+    """Deterministic per-day temperament draw that shifts the mood baseline."""
+
+    word: str = ""
+    date: str = ""
+    valence_shift: float = 0.0
+    energy_shift: float = 0.0
+    tension_shift: float = 0.0
+    drawn_at: str = field(default_factory=iso_now)
+
+    def __post_init__(self) -> None:
+        self.word = str(self.word or "").strip()[:24]
+        self.date = str(self.date or "").strip()[:10]
+        self.valence_shift = clamp(self.valence_shift, -0.3, 0.3)
+        self.energy_shift = clamp(self.energy_shift, -0.3, 0.3)
+        self.tension_shift = clamp(self.tension_shift, -0.3, 0.3)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> TemperamentState:
+        return cls(
+            **{key: data[key] for key in cls.__dataclass_fields__ if key in data}
+        )
+
+
+@dataclass(slots=True)
+class ExpressionGuidance:
+    """Cached expression guidance used to build the injected reply-suggestion block."""
+
+    tone: str = ""
+    can_say: str = ""
+    avoid: str = ""
+    generated_at: str = field(default_factory=iso_now)
+    trigger: str = ""
+    regime: str = ""
+    provider_id: str = ""
+    model_generated: bool = False
+
+    def __post_init__(self) -> None:
+        self.tone = str(self.tone or "").strip()[:200]
+        self.can_say = str(self.can_say or "").strip()[:300]
+        self.avoid = str(self.avoid or "").strip()[:200]
+        self.trigger = str(self.trigger or "").strip()[:48]
+        self.regime = str(self.regime or "").strip()[:120]
+        self.provider_id = str(self.provider_id or "").strip()[:96]
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ExpressionGuidance:
+        return cls(
+            **{key: data[key] for key in cls.__dataclass_fields__ if key in data}
+        )
+
+
+@dataclass(slots=True)
 class StateLedger:
     user_key: str
     schema_version: int = 1
@@ -387,6 +469,15 @@ class StateLedger:
     attention_reconciliation_version: int = 0
     logical_day: str = ""
     mood: MoodState = field(default_factory=MoodState)
+    mood_offset: MoodOffsetState = field(default_factory=MoodOffsetState)
+    today_temperament: TemperamentState = field(default_factory=TemperamentState)
+    last_user_message_ts: float = 0.0
+    last_reviewed_watermark: int = 0
+    last_batch_review_at: str = ""
+    expression_guidance: ExpressionGuidance | None = None
+    life_event_slots: list[str] = field(default_factory=list)
+    life_event_slots_date: str = ""
+    life_events_today: int = 0
     events: list[InnerEvent] = field(default_factory=list)
     attention_items: list[AttentionItem] = field(default_factory=list)
     intimacy: IntimacyState = field(default_factory=IntimacyState)
@@ -422,6 +513,27 @@ class StateLedger:
             ),
             logical_day=str(data.get("logical_day") or ""),
             mood=MoodState.from_dict(data.get("mood") or {}),
+            mood_offset=MoodOffsetState.from_dict(data.get("mood_offset") or {}),
+            today_temperament=TemperamentState.from_dict(
+                data.get("today_temperament") or {}
+            ),
+            last_user_message_ts=float(data.get("last_user_message_ts", 0.0) or 0.0),
+            last_reviewed_watermark=max(
+                0, int(data.get("last_reviewed_watermark", 0) or 0)
+            ),
+            last_batch_review_at=str(data.get("last_batch_review_at") or ""),
+            expression_guidance=(
+                ExpressionGuidance.from_dict(data["expression_guidance"])
+                if isinstance(data.get("expression_guidance"), dict)
+                else None
+            ),
+            life_event_slots=[
+                str(item)[:32]
+                for item in data.get("life_event_slots", [])
+                if isinstance(item, (str, int, float)) and str(item).strip()
+            ][-8:],
+            life_event_slots_date=str(data.get("life_event_slots_date") or "")[:10],
+            life_events_today=max(0, int(data.get("life_events_today", 0) or 0)),
             events=[
                 InnerEvent.from_dict(item)
                 for item in data.get("events", [])
@@ -542,3 +654,37 @@ class EventObservation:
                 str(tag).strip()[:40] for tag in self.tags if str(tag).strip()
             )
         )
+
+
+@dataclass(slots=True)
+class SensitivityParams:
+    """User-tunable multipliers controlling how strongly emotions move and show."""
+
+    overall: float = 1.0
+    negative: float = 1.0
+    positive: float = 1.0
+    recovery: float = 1.0
+    attachment: float = 1.0
+
+    def __post_init__(self) -> None:
+        self.overall = clamp(self.overall, 0.0, 2.0) or 0.0001
+        self.negative = clamp(self.negative, 0.0, 2.0)
+        self.positive = clamp(self.positive, 0.0, 2.0)
+        self.recovery = clamp(self.recovery, 0.1, 2.0) or 0.1
+        self.attachment = clamp(self.attachment, 0.0, 2.0)
+
+    def direction_factor(self, valence: float) -> float:
+        return self.negative if valence < 0 else self.positive
+
+
+@dataclass(slots=True)
+class IntrinsicParams:
+    """Configuration snapshot for endogenous mood dynamics applied during decay."""
+
+    night_hours: tuple[int, ...] = ()
+    night_strength: float = 0.0
+    night_missing_after_hours: float = 0.0
+    temperament_enabled: bool = False
+    drift_amplitude: float = 0.0
+    temperament_words: tuple[str, ...] = ()
+    sensitivity: SensitivityParams = field(default_factory=SensitivityParams)

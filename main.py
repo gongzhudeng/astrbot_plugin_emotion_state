@@ -22,6 +22,7 @@ from .core.attention import (
     attention_kind_label,
     attention_status_label,
     is_attention_overdue,
+    is_open_attention,
     select_attention_items,
 )
 from .core.daily import (
@@ -36,6 +37,7 @@ from .core.guidance import (
     guidance_regime,
     needs_guidance,
     parse_guidance_response,
+    should_refresh_guidance,
 )
 from .core.image_renderer import EmotionStateImageRenderer
 from .core.injector import (
@@ -98,7 +100,7 @@ PLUGIN_NAME = "astrbot_plugin_emotion_state"
     PLUGIN_NAME,
     "灵犀 · 内心世界",
     "私聊专用的连续情绪、心事、每日回顾与亲密状态系统。",
-    "v0.3.1",
+    "v0.3.2",
     "https://github.com/gongzhudeng/astrbot_plugin_emotion_state",
 )
 class EmotionStatePlugin(Star):
@@ -119,6 +121,9 @@ class EmotionStatePlugin(Star):
             intrinsic_factory=self._intrinsic_params,
             offset_half_life_minutes=self._float_config(
                 "transient_mood_half_life_minutes", 15.0
+            ),
+            attention_auto_archive_days=self._float_config(
+                "attention_auto_archive_days", 3.0
             ),
         )
         self.rules = LocalRuleEngine(self._list_config("custom_rules"))
@@ -929,6 +934,22 @@ class EmotionStatePlugin(Star):
                 return
             expected_version = updated.state_version
 
+    async def _apply_review_attention_items(self, user_key: str, payload: Any) -> None:
+        """Apply attention completions/cancellations judged from the chat tail."""
+        observations = self._parse_attention_observations(
+            payload, source="attention_review"
+        )
+        for observation in observations[:4]:
+            _, applied, reason = await self.service.observe_attention(
+                user_key, observation
+            )
+            if not applied:
+                logger.debug(
+                    "[EmotionState] attention review skipped: %s (%s)",
+                    observation.action,
+                    reason,
+                )
+
     async def _recent_chat_messages(self, user_key: str, limit: int = 24) -> str:
         """Read the recent private chat tail from the conversation manager."""
         manager = getattr(self.context, "conversation_manager", None)
@@ -1004,9 +1025,40 @@ class EmotionStatePlugin(Star):
                 self._mark_batch_reviewed(ledger.message_watermark),
             )
             return
+        attention_view = [
+            {
+                "item_id": item.id,
+                "item_version": item.version,
+                "content": item.content[:140],
+                "kind": item.kind,
+                "time_hint": item.time_hint,
+                "due_at": item.due_at,
+                "overdue": is_attention_overdue(item),
+            }
+            for item in ledger.attention_items
+            if is_open_attention(item)
+        ][:8]
+        attention_section = ""
+        if attention_view:
+            attention_section = (
+                "\n## 待关注事项核对（第二任务）\n"
+                "以下是角色记着的约定/待办。逐条对照最近聊天记录判断：\n"
+                "- 按约定的【本意】判断是否已经做到，不要逐字核对字面。夸张说法"
+                '（如"榨干"、"一滴不剩"、"疼死"）指的是它代表的活动本身；'
+                "聊天里能看出该活动已经发生，就算完成。\n"
+                "- 角色自己单方面完成也算数：比如约好发照片，聊天里角色已发出照片并说明"
+                '（如"这是你要的cos照"），即视为完成，不需要用户确认。\n'
+                '- 判断为玩笑、琐碎闲聊或已经无关紧要的事项，输出 action="cancel" 清掉。\n'
+                '- 输出要求：action="complete"或"cancel"，原样填写 item_id 和 '
+                "item_version，evidence_quote 必须引用聊天中的具体记录"
+                '（如"[图片消息]"或原话片段，不得只写"好了/完成了"），'
+                "evidence_speaker 填说出该记录的一方（user/assistant），"
+                "confidence ≥ 0.78。证据不足就跳过该事项，不要编造。\n"
+                f"待办清单：{json.dumps(attention_view, ensure_ascii=False)}\n"
+            )
         prompt = (
-            "请只返回 JSON 数组，判断以下最近私聊记录中是否有值得角色持续记挂的心事"
-            "或明显的情绪影响。要求：\n"
+            "请只返回 JSON 对象，判断以下最近私聊记录，完成两个任务。\n"
+            "## 任务一：心事与情绪影响\n"
             "- 逐条考虑玩笑、转发、引用和前后文；讨论外部内容（视频、抖音、新闻、别人）"
             "不是攻击，最多产生一条轻度的瞬时情绪，不形成心事。\n"
             "- 只有确认是用户对角色本人的负面表达（辱骂、贬低、故意冷落）才输出攻击类心事"
@@ -1016,7 +1068,11 @@ class EmotionStatePlugin(Star):
             "- 每项字段：action(create/intensify/ease/merge)、fact(第一人称、≤80字)、"
             "emotional_meaning、target、target_basis、evidence_quote、evidence_speaker、"
             "category(episodic/psychological/concrete)、valence(-1~1)、intensity(0~1)、"
-            "confidence(0~1)。最多 3 项；没有值得记录的就输出 []。\n"
+            "confidence(0~1)。最多 3 项。\n"
+            f"{attention_section}"
+            "## 输出格式\n"
+            '只返回 JSON 对象：{"event_observations": [...], '
+            '"attention_observations": [...]}；没有可输出的就两个空数组。\n'
             f"最近私聊记录：\n{chat_tail[:6000]}"
         )
         try:
@@ -1026,10 +1082,18 @@ class EmotionStatePlugin(Star):
                 task="review",
             )
             payload = json.loads(response)
-            if not isinstance(payload, list):
+            if isinstance(payload, list):
+                payload = {"event_observations": payload}
+            if not isinstance(payload, dict):
                 return
             await self._apply_review_items(
-                user_key, payload, ledger.message_watermark, provider_id
+                user_key,
+                payload.get("event_observations") or [],
+                ledger.message_watermark,
+                provider_id,
+            )
+            await self._apply_review_attention_items(
+                user_key, payload.get("attention_observations") or []
             )
         except asyncio.CancelledError:
             raise
@@ -1080,19 +1144,17 @@ class EmotionStatePlugin(Star):
             night_hours=options.night_hours,
             now=options.current_time(),
         )
-        gated = options.guidance_when_needed
-        if gated and not needs_guidance(
+        gate_open = not options.guidance_when_needed or needs_guidance(
             ledger,
             night_hours=options.night_hours,
             now=options.current_time(),
-        ):
-            return
-        guidance = ledger.expression_guidance
-        min_interval = max(
-            5.0, self._float_config("guidance_min_interval_minutes", 120)
         )
+        guidance = ledger.expression_guidance
+        min_interval = max(5.0, self._float_config("guidance_min_interval_minutes", 30))
+        max_age_hours = self._float_config("guidance_max_age_hours", 4.0)
         if guidance is None:
-            due = True
+            regime_changed = True
+            age_minutes = min_interval
         else:
             regime_changed = guidance.regime != regime
             try:
@@ -1101,8 +1163,15 @@ class EmotionStatePlugin(Star):
                     datetime.now().astimezone() - generated_at
                 ).total_seconds() / 60.0
             except (TypeError, ValueError):
-                age_minutes = min_interval
-            due = regime_changed and age_minutes >= min(30.0, min_interval)
+                age_minutes = max(min_interval, max_age_hours * 60.0)
+        due = should_refresh_guidance(
+            has_cache=guidance is not None,
+            cache_age_minutes=age_minutes,
+            regime_changed=regime_changed,
+            gate_open=gate_open,
+            min_interval_minutes=min_interval,
+            max_age_hours=max_age_hours,
+        )
         if not due:
             return
         self._spawn_review_task(self._run_guidance_refresh(user_key, regime))

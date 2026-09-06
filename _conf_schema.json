@@ -487,14 +487,14 @@
   },
   "guidance_min_interval_minutes": {
     "description": "表达建议最短刷新间隔（分钟）",
-    "hint": "情绪基调真的变化后，至少间隔这么久才再次生成建议；期间沿用上一份缓存，保证表达节奏像真人一样慢。",
+    "hint": "防抖间隔：情绪基调变化后至少间隔该时长才再次生成，防止快速抖动导致连环生成；正常情况下到达某个需要表达的情绪后 1 分钟内自动总结一次，此后整个情绪阶段沿用该缓存。",
     "type": "int",
     "slider": {
       "min": 10,
       "max": 480,
       "step": 10
     },
-    "default": 120
+    "default": 30
   },
   "guidance_max_chars": {
     "description": "表达建议单条最大字数",
@@ -576,5 +576,27 @@
       "step": 5
     },
     "default": 30
+  },
+  "guidance_max_age_hours": {
+    "description": "表达建议最大时效（小时）",
+    "hint": "超过该时长后，即使情绪标签没变也会重新生成一次，避免深夜的建议挂到第二天早上；0 表示不限时效。",
+    "type": "float",
+    "slider": {
+      "min": 0,
+      "max": 24,
+      "step": 0.5
+    },
+    "default": 4.0
+  },
+  "attention_auto_archive_days": {
+    "description": "待关注事项无证据自动归档（天）",
+    "hint": "未完成事项超过该天数没有任何新证据时自动归档（不视为完成，历史可查）；“明天/晚上”这类文字时间会先换算成精确截止时间，一过点就归档；写着 以后/每次/每天/长期 的事项不受时限影响。0 表示关闭。",
+    "type": "float",
+    "slider": {
+      "min": 0,
+      "max": 14,
+      "step": 1
+    },
+    "default": 3.0
   }
 }

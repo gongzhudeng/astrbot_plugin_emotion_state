@@ -11,6 +11,7 @@ from typing import Any
 from .attention import (
     apply_attention_observation,
     archive_expired_attention_items,
+    archive_stale_attention_items,
     attention_observation_rejection,
     enforce_attention_capacity,
 )
@@ -52,6 +53,7 @@ class EmotionStateService:
         episodic_limit: int = 6,
         intrinsic_factory: Callable[[], IntrinsicParams | None] | None = None,
         offset_half_life_minutes: float = 15.0,
+        attention_auto_archive_days: float = 3.0,
     ) -> None:
         self.store = store
         self.half_life_hours = half_life_hours
@@ -62,6 +64,8 @@ class EmotionStateService:
         # None keeps the legacy purely reactive behaviour (used by old tests).
         self.intrinsic_factory = intrinsic_factory
         self.offset_half_life_minutes = max(1.0, float(offset_half_life_minutes))
+        # 0 disables the stale-attention janitor entirely.
+        self.attention_auto_archive_days = max(0.0, float(attention_auto_archive_days))
         self._locks: dict[str, asyncio.Lock] = {}
 
     def _intrinsic(self) -> IntrinsicParams | None:
@@ -83,6 +87,14 @@ class EmotionStateService:
         reasons: list[str] = []
         updated, expired_attention_ids = archive_expired_attention_items(updated, now)
         reasons.extend("attention_expired_archive" for _ in expired_attention_ids)
+        if self.attention_auto_archive_days > 0:
+            updated, stale_ids = archive_stale_attention_items(
+                updated,
+                max_days=self.attention_auto_archive_days,
+                now=now,
+            )
+            expired_attention_ids.extend(stale_ids)
+            reasons.extend("attention_stale_archive" for _ in stale_ids)
         if episodic_limit is None:
             episodic_limit = self.episodic_limit
         updated, episodic_ids = enforce_episodic_capacity(updated, episodic_limit)

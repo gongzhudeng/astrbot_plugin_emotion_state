@@ -676,3 +676,212 @@ def test_guidance_prompt_states_length_cap() -> None:
         max_chars=120,
     )
     assert "每个字段不超过 120 字" in prompt
+
+
+# ---------------------------------------------------------------------------
+# v0.3.2: guidance freshness guard + attention auto-completion/cleanup
+# ---------------------------------------------------------------------------
+
+
+def test_should_refresh_guidance_branches() -> None:
+    from astrbot_plugin_emotion_state.core.guidance import should_refresh_guidance
+
+    # Gate closed: never.
+    assert (
+        should_refresh_guidance(
+            has_cache=False,
+            cache_age_minutes=0,
+            regime_changed=True,
+            gate_open=False,
+            min_interval_minutes=30,
+            max_age_hours=4,
+        )
+        is False
+    )
+    # No cache + gate open: generate immediately.
+    assert (
+        should_refresh_guidance(
+            has_cache=False,
+            cache_age_minutes=30,
+            regime_changed=False,
+            gate_open=True,
+            min_interval_minutes=30,
+            max_age_hours=4,
+        )
+        is True
+    )
+    # Cache too old: regenerate even without a regime change.
+    assert (
+        should_refresh_guidance(
+            has_cache=True,
+            cache_age_minutes=241,
+            regime_changed=False,
+            gate_open=True,
+            min_interval_minutes=30,
+            max_age_hours=4,
+        )
+        is True
+    )
+    # Regime changed but inside the debounce window: wait.
+    assert (
+        should_refresh_guidance(
+            has_cache=True,
+            cache_age_minutes=10,
+            regime_changed=True,
+            gate_open=True,
+            min_interval_minutes=30,
+            max_age_hours=4,
+        )
+        is False
+    )
+    # Regime changed past the debounce: generate.
+    assert (
+        should_refresh_guidance(
+            has_cache=True,
+            cache_age_minutes=31,
+            regime_changed=True,
+            gate_open=True,
+            min_interval_minutes=30,
+            max_age_hours=4,
+        )
+        is True
+    )
+    # Stable state, fresh cache, max age disabled: quiet.
+    assert (
+        should_refresh_guidance(
+            has_cache=True,
+            cache_age_minutes=600,
+            regime_changed=False,
+            gate_open=True,
+            min_interval_minutes=30,
+            max_age_hours=0,
+        )
+        is False
+    )
+
+
+def test_resolve_due_at_common_hints() -> None:
+    from astrbot_plugin_emotion_state.core.attention import resolve_due_at
+
+    now = datetime(2026, 9, 5, 21, 0).astimezone()
+    tonight = datetime.fromisoformat(resolve_due_at("晚上兑现", now))
+    assert (tonight.year, tonight.month, tonight.day) == (2026, 9, 5)
+    assert tonight.hour == 23
+    tomorrow = datetime.fromisoformat(resolve_due_at("明天醒来穿cos", now))
+    assert (tomorrow.month, tomorrow.day) == (9, 6)
+    assert tomorrow.hour == 23
+    day_after = datetime.fromisoformat(resolve_due_at("后天再说", now))
+    assert (day_after.month, day_after.day) == (9, 7)
+    three_days = datetime.fromisoformat(resolve_due_at("3天内给答复", now))
+    assert (three_days.month, three_days.day) == (9, 8)
+    # Vague hints resolve to nothing (evidence-based cleanup handles them).
+    assert resolve_due_at("以后每次", now) == ""
+    assert resolve_due_at("下次有空", now) == ""
+
+
+def test_attention_review_source_can_complete_items(tmp_path: Path) -> None:
+    from astrbot_plugin_emotion_state.core.attention import (
+        apply_attention_observation,
+    )
+    from astrbot_plugin_emotion_state.core.models import (
+        AttentionItem,
+        AttentionObservation,
+    )
+
+    ledger = StateLedger(user_key="private:att")
+    item = AttentionItem(
+        content="醒来穿蕾姆cos给他看",
+        kind="commitment",
+        status="open",
+        time_hint="明天",
+        confidence=0.9,
+    )
+    ledger.attention_items.append(item)
+
+    observation = AttentionObservation(
+        action="complete",
+        item_id=item.id,
+        item_version=item.version,
+        evidence_quote="这是你要的蕾姆cos照，看看吧",
+        evidence_speaker="assistant",
+        confidence=0.9,
+        source="attention_review",
+    )
+    updated, applied, reason = apply_attention_observation(ledger, observation)
+    assert applied, reason
+    assert updated.attention_items[0].status == "completed"
+
+    # Unknown sources stay locked out.
+    bad = replace_observation_source(observation, "random_model")
+    _, applied, reason = apply_attention_observation(ledger, bad)
+    assert not applied
+    assert reason == "unsupported_attention_source"
+
+
+def replace_observation_source(observation, source: str):
+    from dataclasses import replace
+
+    return replace(observation, source=source)
+
+
+def test_stale_attention_items_get_archived() -> None:
+    from astrbot_plugin_emotion_state.core.attention import (
+        archive_stale_attention_items,
+    )
+    from astrbot_plugin_emotion_state.core.models import AttentionItem
+
+    now = datetime.now(timezone.utc)
+    ledger = StateLedger(user_key="private:stale")
+
+    stale = AttentionItem(content="一件旧约定", status="open", confidence=0.9)
+    stale.created_at = (now - timedelta(days=6)).isoformat()
+    stale.last_evidence_at = stale.created_at
+
+    ongoing = AttentionItem(
+        content="以后每次都要记得说晚安",
+        status="open",
+        time_hint="以后",
+        confidence=0.9,
+    )
+    ongoing.created_at = (now - timedelta(days=30)).isoformat()
+    ongoing.last_evidence_at = ongoing.created_at
+
+    fresh = AttentionItem(content="刚约定的事", status="open", confidence=0.9)
+    ledger.attention_items.extend([stale, ongoing, fresh])
+
+    updated, archived = archive_stale_attention_items(ledger, max_days=3.0, now=now)
+    by_id = {item.id: item for item in updated.attention_items}
+    assert by_id[stale.id].status == "archived"
+    assert by_id[ongoing.id].status == "open"
+    assert by_id[fresh.id].status == "open"
+    assert archived == [stale.id]
+
+
+def test_batch_review_payload_accepts_object_and_legacy_list() -> None:
+    import json as json_module
+
+    from astrbot_plugin_emotion_state.main import EmotionStatePlugin
+
+    payload_object = json_module.loads(
+        '{"event_observations": [{"action": "create"}], '
+        '"attention_observations": [{"action": "complete"}]}'
+    )
+    events, attentions = split_review_payload(payload_object)
+    assert len(events) == 1
+    assert len(attentions) == 1
+
+    legacy = json_module.loads('[{"action": "create"}]')
+    events, attentions = split_review_payload(legacy)
+    assert len(events) == 1
+    assert attentions == []
+
+
+def split_review_payload(payload):
+    if isinstance(payload, list):
+        return payload, []
+    if isinstance(payload, dict):
+        return (
+            payload.get("event_observations") or [],
+            payload.get("attention_observations") or [],
+        )
+    return [], []

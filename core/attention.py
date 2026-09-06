@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from .models import (
     AttentionItem,
@@ -18,6 +18,8 @@ from .models import (
 )
 
 _TERMINAL_STATUSES = {"completed", "cancelled", "superseded", "archived"}
+# Sources trusted to mutate attention items from model output.
+_ATTENTION_REVIEW_SOURCES = {"livingmemory_summary", "attention_review"}
 _ATTENTION_ACTIONS = {
     "create",
     "confirm",
@@ -84,14 +86,102 @@ def is_open_attention(item: AttentionItem) -> bool:
 
 
 def is_attention_overdue(item: AttentionItem, now: datetime | None = None) -> bool:
-    if not is_open_attention(item) or not item.due_at:
+    if not is_open_attention(item):
         return False
     if _ONGOING_ATTENTION_CUES.search(f"{item.time_hint} {item.content}"):
         return False
+    # Textual hints (明天/今晚/周X…) resolve to a concrete due time so one-off
+    # items can actually expire instead of lingering forever.
+    due_text = item.due_at or resolve_due_at(item.time_hint, now)
+    if not due_text:
+        return False
     try:
-        return parse_time(item.due_at) < (now or utc_now())
+        return parse_time(due_text) < (now or utc_now())
     except (TypeError, ValueError):
         return False
+
+
+_CN_DIGITS = {
+    "一": 1,
+    "两": 2,
+    "二": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+    "十": 10,
+}
+_WEEKDAY_NAMES = {
+    "一": 0,
+    "二": 1,
+    "三": 2,
+    "四": 3,
+    "五": 4,
+    "六": 5,
+    "日": 6,
+    "天": 6,
+}
+
+
+def resolve_due_at(time_hint: str, now: datetime | None = None) -> str:
+    """Translate a textual time hint into a concrete due timestamp.
+
+    Supports 今晚/今天/晚上 (today), 明天/明晚 (+1 day), 后天/大后天, 周X/星期X,
+    and N 天/小时 (后|之内|内). Returns "" when nothing conclusive can be parsed
+    (e.g. 以后/下次/有空), leaving the item to evidence-based cleanup instead.
+    """
+    anchor = (now or utc_now()).astimezone()
+    text = str(time_hint or "").strip()
+
+    def due(end_of_day: bool, days: int = 0, hours: float = 0.0) -> str:
+        moment = anchor + timedelta(days=days, hours=hours)
+        if end_of_day:
+            moment = moment.replace(hour=23, minute=59, second=0, microsecond=0)
+        return moment.isoformat()
+
+    day_offsets = (("大后天", 3), ("后天", 2), ("明天", 1), ("明晚", 1), ("明早", 1))
+    for cue, offset in day_offsets:
+        if cue in text:
+            return due(True, days=offset)
+    if re.search(r"今晚|今夜|今天|当晚", text):
+        return due(True)
+    if (
+        re.search(r"(?<!明)(?<!大)晚上|夜里|睡前", text)
+        and "明天" not in text
+        and "后天" not in text
+    ):
+        return due(True)
+    weekday = re.search(r"(?:周|星期|礼拜)\s*([一二三四五六日天])", text)
+    if weekday:
+        target = _WEEKDAY_NAMES[weekday.group(1)]
+        offset = (target - anchor.weekday()) % 7
+        if offset == 0:
+            offset = 7
+        return due(True, days=offset)
+    days_match = re.search(
+        r"([一两二三四五六七八九十\d]+)\s*天(?:之后|以后|后|之内|内)?", text
+    )
+    if days_match:
+        raw = days_match.group(1)
+        count = int(raw) if raw.isdigit() else _CN_DIGITS.get(raw, 0)
+        if count > 0:
+            return due(True, days=count)
+    hours_match = re.search(
+        r"([一两二三四五六七八九十\d]+|半)\s*(?:个)?小时(?:之后|以后|后|之内|内)?", text
+    )
+    if hours_match:
+        raw = hours_match.group(1)
+        hours = (
+            0.5
+            if raw == "半"
+            else (int(raw) if raw.isdigit() else _CN_DIGITS.get(raw, 0))
+        )
+        if hours > 0:
+            return due(False, hours=hours)
+    return ""
 
 
 def archive_expired_attention_items(
@@ -117,6 +207,60 @@ def archive_expired_attention_items(
                 amount=0.0,
                 note="已超过明确截止时间，自动归档（不视为完成）",
                 source="emotion_state_expiry",
+            )
+        )
+        item.evidence = item.evidence[-30:]
+        archived_ids.append(item.id)
+    if archived_ids:
+        updated.state_version += 1
+        updated.updated_at = timestamp
+    return updated, archived_ids
+
+
+def archive_stale_attention_items(
+    ledger: StateLedger,
+    *,
+    max_days: float = 3.0,
+    now: datetime | None = None,
+) -> tuple[StateLedger, list[str]]:
+    """Archive one-off open items with no new evidence for ``max_days``.
+
+    Long-term items (以后/每次/每天/长期) are exempt. This is a janitor, not a
+    completion claim: the archive note explicitly says it is not success.
+    """
+    bounded = float(max_days)
+    updated = _copy_ledger(ledger)
+    if bounded <= 0:
+        return updated, []
+    current_time = now or utc_now()
+    timestamp = current_time.isoformat()
+    archived_ids: list[str] = []
+    for item in updated.attention_items:
+        if not is_open_attention(item) or is_attention_overdue(item, current_time):
+            continue
+        if _ONGOING_ATTENTION_CUES.search(f"{item.time_hint} {item.content}"):
+            continue
+        anchor_text = item.last_evidence_at or item.created_at
+        try:
+            anchor = parse_time(anchor_text)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if anchor.tzinfo is None:
+            anchor = anchor.replace(tzinfo=utc_now().tzinfo)
+        quiet_days = (current_time - anchor).total_seconds() / 86400.0
+        if quiet_days < bounded:
+            continue
+        item.status = "archived"
+        item.archived_at = timestamp
+        item.updated_at = timestamp
+        item.version += 1
+        item.evidence.append(
+            EventTrace(
+                at=timestamp,
+                kind="archive_attention_stale",
+                amount=0.0,
+                note=f"超过 {bounded:.0f} 天没有任何新证据，自动归档（不视为完成）",
+                source="emotion_state_stale",
             )
         )
         item.evidence = item.evidence[-30:]
@@ -233,7 +377,7 @@ def attention_observation_rejection(
     observation: AttentionObservation,
 ) -> str | None:
     """Reject weak model suggestions before they can change the durable ledger."""
-    if observation.source != "livingmemory_summary":
+    if observation.source not in _ATTENTION_REVIEW_SOURCES:
         return "unsupported_attention_source"
     if observation.action not in _ATTENTION_ACTIONS:
         return "invalid_attention_action"
@@ -356,7 +500,7 @@ def apply_attention_observation(
             status=observation.status,
             actor=observation.actor,
             time_hint=observation.time_hint,
-            due_at=observation.due_at,
+            due_at=observation.due_at or resolve_due_at(observation.time_hint),
             confidence=observation.confidence,
             explicit=observation.explicit,
             source=observation.source,
@@ -389,7 +533,11 @@ def apply_attention_observation(
                     current.content
                 )
             current.time_hint = observation.time_hint or current.time_hint
-            current.due_at = observation.due_at or current.due_at
+            current.due_at = (
+                observation.due_at
+                or current.due_at
+                or resolve_due_at(current.time_hint)
+            )
             current.confidence = max(current.confidence, observation.confidence)
         elif observation.action in {"complete", "cancel", "supersede"}:
             if current.status in _TERMINAL_STATUSES:

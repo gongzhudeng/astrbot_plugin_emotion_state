@@ -21,6 +21,33 @@ GUIDANCE_BLOCK_END = "</emotion_state_guidance>"
 NEUTRAL_LABELS = {"平静", "温和愉快"}
 
 
+def should_refresh_guidance(
+    *,
+    has_cache: bool,
+    cache_age_minutes: float,
+    regime_changed: bool,
+    gate_open: bool,
+    min_interval_minutes: float,
+    max_age_hours: float,
+) -> bool:
+    """Decide whether the cached reply suggestion should be regenerated.
+
+    Edge-triggered: reaching a state worth expressing generates once and the
+    result covers the whole episode. ``max_age_hours`` is a bounded freshness
+    guard so a suggestion never outlives its context (e.g. a late-night note
+    lingering into the next morning); ``min_interval_minutes`` only debounces
+    rapid state flapping.
+    """
+    if not gate_open:
+        return False
+    if not has_cache:
+        return True
+    max_age_minutes = max(0.0, float(max_age_hours)) * 60.0
+    if max_age_minutes > 0 and cache_age_minutes >= max_age_minutes:
+        return True
+    return regime_changed and cache_age_minutes >= max(0.0, float(min_interval_minutes))
+
+
 def time_band(now: datetime) -> str:
     """Return a coarse human-readable time band for prompts."""
     hour = now.astimezone().hour
@@ -191,7 +218,7 @@ def _clean_guidance_field(value: Any, max_chars: int) -> str:
     if isinstance(value, (list, tuple)):
         value = "；".join(str(item).strip() for item in value if str(item).strip())
     clean = re.sub(r"(。)\1+", r"\1", str(value or "").strip())
-    return clean[:max(20, int(max_chars))]
+    return clean[: max(20, int(max_chars))]
 
 
 def parse_guidance_response(text: str, max_chars: int = 200) -> dict[str, str]:

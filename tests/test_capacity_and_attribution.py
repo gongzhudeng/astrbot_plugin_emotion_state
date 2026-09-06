@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from datetime import datetime, timedelta, timezone
 from astrbot_plugin_emotion_state.core.models import (
     AttentionItem,
     InnerEvent,
@@ -126,7 +127,11 @@ async def test_attention_capacity_keeps_terminal_history_and_audits_overflow(
             status="open",
             confidence=0.4 + index * 0.05,
             explicit=index >= 3,
-            last_evidence_at=f"2026-03-14T0{index}:00:00+00:00",
+            # Recent evidence: the stale-attention janitor only clears items
+            # that have had no new evidence for attention_auto_archive_days.
+            last_evidence_at=(
+                datetime.now(timezone.utc) - timedelta(hours=index + 2)
+            ).isoformat(),
         )
         for index in range(9)
     ]

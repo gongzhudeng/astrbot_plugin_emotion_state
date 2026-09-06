@@ -885,3 +885,29 @@ def split_review_payload(payload):
             payload.get("attention_observations") or [],
         )
     return [], []
+
+
+@pytest.mark.asyncio
+async def test_recent_chat_messages_uses_livingmemory_handshake() -> None:
+    from types import SimpleNamespace
+
+    from astrbot_plugin_emotion_state.main import EmotionStatePlugin
+
+    plugin = EmotionStatePlugin.__new__(EmotionStatePlugin)
+
+    async def lookup(session_id, since="", limit=600):
+        return [
+            {"speaker": "user", "at": "", "text": "今天好累"},
+            {"speaker": "assistant", "at": "", "text": "抱抱"},
+            {"speaker": "user", "at": "", "text": ""},
+        ]
+
+    plugin.context = SimpleNamespace(_livingmemory_get_attention_history=lookup)
+    tail = await plugin._recent_chat_messages("private:x", limit=10)
+    assert "用户：今天好累" in tail
+    assert "角色：抱抱" in tail
+    assert "：''" not in tail
+
+    # Missing handshake: empty tail, no exception (batch stays pending).
+    plugin.context = SimpleNamespace()
+    assert await plugin._recent_chat_messages("private:x") == ""

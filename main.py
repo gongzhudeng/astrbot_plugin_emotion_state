@@ -100,7 +100,7 @@ PLUGIN_NAME = "astrbot_plugin_emotion_state"
     PLUGIN_NAME,
     "灵犀 · 内心世界",
     "私聊专用的连续情绪、心事、每日回顾与亲密状态系统。",
-    "v0.3.2",
+    "v0.3.3",
     "https://github.com/gongzhudeng/astrbot_plugin_emotion_state",
 )
 class EmotionStatePlugin(Star):
@@ -951,28 +951,32 @@ class EmotionStatePlugin(Star):
                 )
 
     async def _recent_chat_messages(self, user_key: str, limit: int = 24) -> str:
-        """Read the recent private chat tail from the conversation manager."""
-        manager = getattr(self.context, "conversation_manager", None)
-        if manager is None:
-            return ""
-        try:
-            messages = await manager.get_messages(
-                user_key, limit=limit, use_cache=False
+        """Read the recent private chat tail via the LivingMemory handshake.
+
+        The core ConversationManager does not expose raw messages, so the
+        batch review borrows LivingMemory's bounded read-only window (the
+        same one the attention backfill has used in production).
+        """
+        lookup = getattr(self.context, "_livingmemory_get_attention_history", None)
+        if not callable(lookup):
+            # Keep the batch pending; it retries once LivingMemory is loaded.
+            logger.debug(
+                "[EmotionState] chat tail unavailable: LivingMemory handshake missing"
             )
-        except Exception as exc:
-            logger.debug("[EmotionState] conversation tail unavailable: %s", exc)
             return ""
+        history = lookup(user_key, since="", limit=limit)
+        if asyncio.iscoroutine(history):
+            history = await history
         lines: list[str] = []
-        for message in messages:
-            is_assistant = message.role == "assistant" or bool(
-                (message.metadata or {}).get("is_bot_message", False)
-            )
-            text = str(message.content_to_text(message.content) or "").strip()
+        for row in history or []:
+            if not isinstance(row, dict):
+                continue
+            text = str(row.get("text", "") or "").strip()
             if not text:
                 continue
-            speaker = "角色" if is_assistant else "用户"
+            speaker = "角色" if str(row.get("speaker", "")) == "assistant" else "用户"
             lines.append(f"{speaker}：{text[:400]}")
-        return "\n".join(lines[-24:])
+        return "\n".join(lines[-limit:])
 
     async def _review_batch_loop(self) -> None:
         """Throttled batch review: ~one model call per N messages, never blocking."""
@@ -1019,6 +1023,12 @@ class EmotionStatePlugin(Star):
             return
         chat_tail = await self._recent_chat_messages(user_key)
         if not chat_tail:
+            if not callable(
+                getattr(self.context, "_livingmemory_get_attention_history", None)
+            ):
+                # Broken lookup: keep the batch pending instead of marking it
+                # reviewed, otherwise those messages would be skipped forever.
+                return
             await self.service.mutate(
                 user_key,
                 "batch_review_mark",

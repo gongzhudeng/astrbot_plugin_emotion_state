@@ -100,7 +100,7 @@ PLUGIN_NAME = "astrbot_plugin_emotion_state"
     PLUGIN_NAME,
     "灵犀 · 内心世界",
     "私聊专用的连续情绪、心事、每日回顾与亲密状态系统。",
-    "v0.3.3",
+    "v0.3.4",
     "https://github.com/gongzhudeng/astrbot_plugin_emotion_state",
 )
 class EmotionStatePlugin(Star):

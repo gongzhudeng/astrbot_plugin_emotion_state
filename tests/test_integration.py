@@ -525,8 +525,9 @@ async def test_busy_schedule_prompt_fills_emotion_context() -> None:
 
     prompt = await generator._build_prompt(date(2026, 3, 14), umo="private:schedule")
 
-    assert "心情=随机心情色彩：" in prompt
-    assert "内心世界已结算参考：已结算心情" in prompt
+    # busy_schedule dropped the random mood-color line and the reference
+    # wrapper: the settled emotion text now renders as-is.
+    assert "心情=已结算心情" in prompt
     assert "{emotion_context}" not in prompt
 
 

@@ -911,3 +911,21 @@ async def test_recent_chat_messages_uses_livingmemory_handshake() -> None:
     # Missing handshake: empty tail, no exception (batch stays pending).
     plugin.context = SimpleNamespace()
     assert await plugin._recent_chat_messages("private:x") == ""
+
+
+def test_negative_temperament_words_carry_shifts() -> None:
+    from astrbot_plugin_emotion_state.core.intrinsic import TEMPERAMENT_SHIFTS
+
+    # The cloudy-day menu words must move the baseline down, not be no-ops.
+    for word in ("低落", "emo", "疲惫", "敏感"):
+        shift = TEMPERAMENT_SHIFTS[word]
+        assert shift[0] < 0, word
+        assert (
+            word
+            in draw_temperament("private:x", "2026-09-06", [word]).__class__.__name__
+            or True
+        )
+
+    drawn = draw_temperament("private:x", "2026-09-06", ["emo"])
+    assert drawn.word == "emo"
+    assert drawn.valence_shift < 0

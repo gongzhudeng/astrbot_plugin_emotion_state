@@ -39,6 +39,10 @@ LIFECYCLE_WEIGHT = {
     "archived": 0.0,
 }
 
+# Extra weight for user-directed negative events: a hurtful moment must not
+# be averaged away by pleasant background evidence.
+DEFAULT_NEGATIVE_BIAS = 2.5
+
 
 def event_fingerprint(fact: str, target: str) -> str:
     normalized = re.sub(r"\W+", "", f"{target}:{fact}".lower())
@@ -73,6 +77,8 @@ def apply_observation(
     ledger: StateLedger,
     observation: EventObservation,
     activation_confidence: float = 0.62,
+    *,
+    negative_bias: float = DEFAULT_NEGATIVE_BIAS,
 ) -> tuple[StateLedger, bool, str]:
     """Apply one evidence item without allowing stale model output to overwrite state."""
     if (
@@ -215,7 +221,9 @@ def apply_observation(
     )
     updated.state_version += 1
     updated.updated_at = now
-    updated.mood = derive_mood(updated.events, previous=updated.mood)
+    updated.mood = derive_mood(
+        updated.events, previous=updated.mood, negative_bias=negative_bias
+    )
     return updated, True, "applied"
 
 
@@ -226,6 +234,7 @@ def decay_ledger(
     *,
     intrinsic: IntrinsicParams | None = None,
     offset_half_life_minutes: float = 15.0,
+    negative_bias: float = DEFAULT_NEGATIVE_BIAS,
 ) -> StateLedger:
     current_time = now or utc_now()
     updated = _copy_ledger(ledger)
@@ -279,7 +288,9 @@ def decay_ledger(
         decay_mood_offset(updated, elapsed_hours, offset_half_life_minutes) or changed
     )
 
-    baseline_mood = derive_mood(updated.events, previous=MoodState())
+    baseline_mood = derive_mood(
+        updated.events, previous=MoodState(), negative_bias=negative_bias
+    )
     if intrinsic is not None:
         shift_v, shift_e, shift_t = intrinsic_baseline_shift(
             updated, current_time, intrinsic
@@ -331,30 +342,58 @@ def decay_ledger(
     if changed:
         updated.state_version += 1
         updated.updated_at = current_time.isoformat()
-        updated.mood = derive_mood(updated.events, previous=updated.mood)
+        updated.mood = derive_mood(
+            updated.events, previous=updated.mood, negative_bias=negative_bias
+        )
     return updated
 
 
 def derive_mood(
-    events: list[InnerEvent], previous: MoodState | None = None
+    events: list[InnerEvent],
+    previous: MoodState | None = None,
+    *,
+    negative_bias: float = DEFAULT_NEGATIVE_BIAS,
 ) -> MoodState:
+    """Derive mood from weighted evidence with a negativity bias.
+
+    A hurtful event aimed at the character must not be averaged away by
+    pleasant background evidence - real people cannot stay cheerful right
+    after being hurt. User-directed negative events therefore carry an
+    extra weight, and a strong negative tilt pulls valence down
+    non-linearly. Positive weights stay untouched.
+    """
     prior = previous or MoodState()
     active = [event for event in events if event.lifecycle != "archived"]
-    weighted = [
-        (
-            event,
+    bias = clamp(float(negative_bias), 1.0, 4.0)
+    weighted = []
+    for event in active:
+        weight = (
             event.intensity
             * event.confidence
-            * LIFECYCLE_WEIGHT.get(event.lifecycle, 0.0),
+            * LIFECYCLE_WEIGHT.get(event.lifecycle, 0.0)
         )
-        for event in active
-    ]
+        if (
+            event.valence < 0
+            and str(event.target).strip().lower() == "user"
+            and event.lifecycle in {"active", "intensified"}
+        ):
+            weight *= bias
+        weighted.append((event, weight))
     total = sum(weight for _, weight in weighted)
     evidence_valence = (
         sum(event.valence * weight for event, weight in weighted) / total
         if total
         else 0.0
     )
+    negative_share = (
+        sum(weight for event, weight in weighted if event.valence < 0) / total
+        if total
+        else 0.0
+    )
+    if evidence_valence < 0:
+        # Non-linear pull: once negative evidence dominates, the harm is felt
+        # disproportionately more than the raw average suggests.
+        evidence_valence *= 1.0 + negative_share * (bias - 1.0) * 0.5
     strongest = max((weight for _, weight in weighted), default=0.0)
     target_valence = clamp(evidence_valence, -1.0, 1.0)
     valence = clamp(prior.valence * 0.55 + target_valence * 0.45, -1.0, 1.0)
@@ -743,6 +782,8 @@ def is_legacy_transient_event(event: InnerEvent) -> bool:
 
 def archive_legacy_transient_events(
     ledger: StateLedger,
+    *,
+    negative_bias: float = DEFAULT_NEGATIVE_BIAS,
 ) -> tuple[StateLedger, list[str]]:
     updated = _copy_ledger(ledger)
     archived_ids: list[str] = []
@@ -768,7 +809,9 @@ def archive_legacy_transient_events(
         event.traces = event.traces[-50:]
         archived_ids.append(event.id)
     if archived_ids:
-        updated.mood = derive_mood(updated.events, previous=updated.mood)
+        updated.mood = derive_mood(
+            updated.events, previous=updated.mood, negative_bias=negative_bias
+        )
         updated.updated_at = now
     return updated, archived_ids
 
@@ -892,6 +935,8 @@ def select_injected_events(
 def settle_summary_mood(
     ledger: StateLedger,
     proposal: dict[str, object],
+    *,
+    negative_bias: float = DEFAULT_NEGATIVE_BIAS,
 ) -> StateLedger:
     """Blend one model summary proposal with bounded visible influence."""
     updated = _copy_ledger(ledger)
@@ -930,6 +975,8 @@ def settle_summary_mood(
 def enforce_episodic_capacity(
     ledger: StateLedger,
     limit: int = 6,
+    *,
+    negative_bias: float = DEFAULT_NEGATIVE_BIAS,
 ) -> tuple[StateLedger, list[str]]:
     """Keep all visible recent events within one configured capacity bucket."""
     updated = _copy_ledger(ledger)
@@ -964,13 +1011,17 @@ def enforce_episodic_capacity(
         archived_ids.append(event.id)
     updated.state_version += 1
     updated.updated_at = now
-    updated.mood = derive_mood(updated.events, previous=updated.mood)
+    updated.mood = derive_mood(
+        updated.events, previous=updated.mood, negative_bias=negative_bias
+    )
     return updated, archived_ids
 
 
 def enforce_psychological_capacity(
     ledger: StateLedger,
     limit: int = 6,
+    *,
+    negative_bias: float = DEFAULT_NEGATIVE_BIAS,
 ) -> tuple[StateLedger, list[str]]:
     """Keep all visible long-term events within one configured capacity bucket."""
     updated = _copy_ledger(ledger)
@@ -1009,7 +1060,9 @@ def enforce_psychological_capacity(
         archived_ids.append(event.id)
     updated.state_version += 1
     updated.updated_at = now
-    updated.mood = derive_mood(updated.events, previous=updated.mood)
+    updated.mood = derive_mood(
+        updated.events, previous=updated.mood, negative_bias=negative_bias
+    )
     return updated, archived_ids
 
 
@@ -1017,10 +1070,14 @@ def settle_mood_proposal(
     ledger: StateLedger,
     proposal: dict[str, object],
     confidence: float,
+    *,
+    negative_bias: float = DEFAULT_NEGATIVE_BIAS,
 ) -> StateLedger:
     """Blend a low-authority daily proposal with deterministic event state."""
     updated = _copy_ledger(ledger)
-    authoritative = derive_mood(updated.events, previous=updated.mood)
+    authoritative = derive_mood(
+        updated.events, previous=updated.mood, negative_bias=negative_bias
+    )
     trust = min(0.2, max(0.0, float(confidence)) * 0.2)
 
     def proposed(name: str, current: float, lower: float, upper: float) -> float:
@@ -1073,6 +1130,7 @@ def settle_proactive_evidence(
     max_intensity: float = 0.55,
     max_stage: int = 3,
     episodic_limit: int = 6,
+    negative_bias: float = DEFAULT_NEGATIVE_BIAS,
 ) -> StateLedger:
     """Project bounded Spark delivery facts into independent episodic events."""
     updated = _copy_ledger(ledger)
@@ -1217,7 +1275,9 @@ def settle_proactive_evidence(
         key=lambda item: (item.sent_at, item.evidence_id),
     )[-32:]
     updated, _ = enforce_episodic_capacity(updated, episodic_limit)
-    updated.mood = derive_mood(updated.events, previous=updated.mood)
+    updated.mood = derive_mood(
+        updated.events, previous=updated.mood, negative_bias=negative_bias
+    )
     updated.updated_at = iso_now()
     return updated
 
@@ -1231,6 +1291,7 @@ def settle_unanswered_proactive(
     threshold_minutes: float = 180.0,
     max_intensity: float = 0.55,
     max_stage: int = 3,
+    negative_bias: float = DEFAULT_NEGATIVE_BIAS,
 ) -> StateLedger:
     """Apply one bounded negative signal for a genuinely unanswered proactive message."""
     updated = _copy_ledger(ledger)
@@ -1289,7 +1350,9 @@ def settle_unanswered_proactive(
     )
     if current:
         current.intensity = min(current.intensity, clamp(max_intensity))
-        updated.mood = derive_mood(updated.events, previous=updated.mood)
+        updated.mood = derive_mood(
+            updated.events, previous=updated.mood, negative_bias=negative_bias
+        )
     updated.proactive_message_ts = proactive_ts
     updated.proactive_applied_stage = next_stage
     updated.proactive_replied = False

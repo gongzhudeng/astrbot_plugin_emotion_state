@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -860,7 +861,6 @@ def test_stale_attention_items_get_archived() -> None:
 def test_batch_review_payload_accepts_object_and_legacy_list() -> None:
     import json as json_module
 
-    from astrbot_plugin_emotion_state.main import EmotionStatePlugin
 
     payload_object = json_module.loads(
         '{"event_observations": [{"action": "create"}], '
@@ -929,3 +929,70 @@ def test_negative_temperament_words_carry_shifts() -> None:
     drawn = draw_temperament("private:x", "2026-09-06", ["emo"])
     assert drawn.word == "emo"
     assert drawn.valence_shift < 0
+
+
+# ---------------------------------------------------------------------------
+# v0.3.5: negativity bias in derive_mood + review JSON cleaning
+# ---------------------------------------------------------------------------
+
+
+def test_derive_mood_negative_bias_beats_positive_hedging() -> None:
+    from astrbot_plugin_emotion_state.core.settlement import derive_mood
+
+    hurt = InnerEvent(
+        fact="我开玩笑说不稀罕他的照片，他当真了，很难过",
+        emotional_meaning="伤到了他",
+        target="user",
+        valence=-0.8,
+        intensity=0.66,
+        confidence=0.9,
+        lifecycle="active",
+    )
+    sweet = InnerEvent(
+        fact="昨晚的甜蜜互动",
+        emotional_meaning="很开心",
+        target="user",
+        valence=0.75,
+        intensity=0.5,
+        confidence=0.9,
+        lifecycle="active",
+    )
+
+    # Without bias the two nearly cancel; with bias the hurt dominates.
+    plain = derive_mood([hurt, sweet], negative_bias=1.0)
+    biased = derive_mood([hurt, sweet], negative_bias=2.5)
+    assert biased.valence < 0
+    assert biased.valence < plain.valence * 4
+    assert biased.label in {"低落", "有些在意"}
+    assert plain.label in {"平静", "温和愉快"}
+
+    # Pure positive evidence is untouched by the bias.
+    positive_only_plain = derive_mood([sweet], negative_bias=1.0)
+    positive_only_biased = derive_mood([sweet], negative_bias=2.5)
+    assert positive_only_plain.valence == pytest.approx(positive_only_biased.valence)
+
+    # Third-party negative events do not get the bias.
+    from dataclasses import replace as _dc_replace
+    third_party = _dc_replace(hurt, target="third_party")
+    assert (
+        derive_mood([third_party, sweet], negative_bias=2.5).valence
+        > derive_mood([hurt, sweet], negative_bias=2.5).valence
+    )
+
+
+def test_extract_json_payload_cleans_and_rejects() -> None:
+    from astrbot_plugin_emotion_state.main import extract_json_payload
+
+    fenced = '```json\n[{"action": "create"}]\n```'
+    parsed = extract_json_payload(fenced)
+    assert parsed == [{"action": "create"}]
+
+    noisy = '结果如下：{"event_observations": [], "attention_observations": []}'
+    assert extract_json_payload(noisy) == {
+        "event_observations": [],
+        "attention_observations": [],
+    }
+    with pytest.raises(ValueError):
+        extract_json_payload("")
+    with pytest.raises((ValueError, json.JSONDecodeError)):
+        extract_json_payload("502 Upstream service temporarily unavailable")

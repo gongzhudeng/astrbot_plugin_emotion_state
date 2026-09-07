@@ -96,11 +96,52 @@ from .core.text_limits import EVENT_FACT_STORAGE_CHARS, bound_complete_text
 PLUGIN_NAME = "astrbot_plugin_emotion_state"
 
 
+def extract_json_payload(text: str) -> Any:
+    """Extract the first JSON object/array from a raw model response.
+
+    Intermediate relays sometimes wrap payloads in markdown fences or return
+    an error page instead of JSON. Cleaning here lets a still-failing parse
+    raise into the provider gateway, which then retries or switches models
+    instead of silently dropping the whole review batch.
+    """
+    cleaned = str(text or "").strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=re.I).strip()
+    if not cleaned:
+        raise ValueError("empty model response")
+    obj_start, arr_start = cleaned.find("{"), cleaned.find("[")
+    if arr_start != -1 and (obj_start == -1 or arr_start < obj_start):
+        end = cleaned.rfind("]")
+        if end > arr_start:
+            return json.loads(cleaned[arr_start : end + 1])
+    if obj_start != -1:
+        end = cleaned.rfind("}")
+        if end > obj_start:
+            return json.loads(cleaned[obj_start : end + 1])
+    # No structural markers at all: try the raw text so json.JSONDecodeError
+    # (not ValueError) surfaces for the gateway's failure handling.
+    return json.loads(cleaned)
+
+
+def _require_json_list(raw: str) -> list[Any]:
+    payload = extract_json_payload(raw)
+    if not isinstance(payload, list):
+        raise ValueError("review response is not a JSON array")
+    return payload
+
+
+def _require_json_object(raw: str) -> dict[str, Any]:
+    payload = extract_json_payload(raw)
+    if not isinstance(payload, dict):
+        raise ValueError("review response is not a JSON object")
+    return payload
+
+
 @register(
     PLUGIN_NAME,
     "灵犀 · 内心世界",
     "私聊专用的连续情绪、心事、每日回顾与亲密状态系统。",
-    "v0.3.4",
+    "v0.3.5",
     "https://github.com/gongzhudeng/astrbot_plugin_emotion_state",
 )
 class EmotionStatePlugin(Star):
@@ -125,6 +166,7 @@ class EmotionStatePlugin(Star):
             attention_auto_archive_days=self._float_config(
                 "attention_auto_archive_days", 3.0
             ),
+            negative_bias=self._float_config("sensitivity_negative_bias", 2.5),
         )
         self.rules = LocalRuleEngine(self._list_config("custom_rules"))
         self.gateway = ProviderGateway(context, config)
@@ -870,9 +912,12 @@ class EmotionStatePlugin(Star):
                     f"消息：{text[:1000]}"
                 )
                 response, provider_id = await self.gateway.complete(
-                    prompt, user_key, task="review"
+                    prompt,
+                    user_key,
+                    task="review",
+                    validate=lambda raw: _require_json_list(raw),
                 )
-                payload = json.loads(response)
+                payload = extract_json_payload(response)
                 if not isinstance(payload, list):
                     return
                 await self._apply_review_items(
@@ -1090,8 +1135,9 @@ class EmotionStatePlugin(Star):
                 prompt,
                 user_key,
                 task="review",
+                validate=lambda raw: _require_json_object(raw),
             )
-            payload = json.loads(response)
+            payload = extract_json_payload(response)
             if isinstance(payload, list):
                 payload = {"event_observations": payload}
             if not isinstance(payload, dict):
@@ -1464,6 +1510,7 @@ class EmotionStatePlugin(Star):
                     max_intensity=silence_cap,
                     max_stage=self._int_config("proactive_silence_max_stages", 3),
                     episodic_limit=self._int_config("max_active_episodic_events", 6),
+                    negative_bias=self._float_config("sensitivity_negative_bias", 2.5),
                 )
 
             updated, _ = await self.service.mutate_if_changed(
@@ -1488,6 +1535,7 @@ class EmotionStatePlugin(Star):
                 ),
                 max_intensity=silence_cap,
                 max_stage=self._int_config("proactive_silence_max_stages", 3),
+                negative_bias=self._float_config("sensitivity_negative_bias", 2.5),
             )
             return acknowledge_proactive_reply(
                 current,
@@ -1618,6 +1666,7 @@ class EmotionStatePlugin(Star):
                 current,
                 entry.mood_proposal if proposal_is_current else {},
                 entry.confidence if proposal_is_current else 0.0,
+                negative_bias=self._float_config("sensitivity_negative_bias", 2.5),
             )
             current.diaries = [
                 item for item in current.diaries if item.cycle_date != cycle_date
@@ -1881,7 +1930,10 @@ class EmotionStatePlugin(Star):
 
         def archive(current: StateLedger) -> StateLedger:
             nonlocal archived_ids
-            updated, archived_ids = archive_legacy_transient_events(current)
+            updated, archived_ids = archive_legacy_transient_events(
+                current,
+                negative_bias=self._float_config("sensitivity_negative_bias", 2.5),
+            )
             return updated
 
         _, changed = await self.service.mutate_if_changed(

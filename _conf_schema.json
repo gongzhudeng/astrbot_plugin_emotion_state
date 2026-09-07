@@ -416,6 +416,17 @@
     },
     "default": 1.0
   },
+  "sensitivity_negative_bias": {
+    "description": "敏感度：负向人际事件权重",
+    "hint": "针对角色的负向心事（被骂、被伤到）在心境结算中的超额权重，1 为无偏差（会被开心事平均掉）；默认 2.5 表示这类事件的影响约为普通事件的 2.5 倍——刚被伤到时，之前再开心也开心不起来。",
+    "type": "float",
+    "slider": {
+      "min": 1.0,
+      "max": 4.0,
+      "step": 0.25
+    },
+    "default": 2.5
+  },
   "sensitivity_positive": {
     "description": "敏感度：正向事件抬升",
     "hint": "被夸、亲密互动、开心事对情绪的抬升强度。",
@@ -585,14 +596,14 @@
   },
   "guidance_max_age_hours": {
     "description": "表达建议最大时效（小时）",
-    "hint": "超过该时长后，即使情绪标签没变也会重新生成一次，避免深夜的建议挂到第二天早上；0 表示不限时效。",
+    "hint": "超过该时长后，即使情绪标签没变也会重新生成一次，避免深夜的建议挂到第二天早上；0 表示不限时效。突发情感事件导致的心境标签变化不受此时效限制（30 分钟防抖后即刷新）。",
     "type": "float",
     "slider": {
       "min": 0,
       "max": 24,
       "step": 0.5
     },
-    "default": 4.0
+    "default": 2.0
   },
   "attention_auto_archive_days": {
     "description": "待关注事项无证据自动归档（天）",

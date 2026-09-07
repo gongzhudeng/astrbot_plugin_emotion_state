@@ -54,6 +54,7 @@ class EmotionStateService:
         intrinsic_factory: Callable[[], IntrinsicParams | None] | None = None,
         offset_half_life_minutes: float = 15.0,
         attention_auto_archive_days: float = 3.0,
+        negative_bias: float = 2.5,
     ) -> None:
         self.store = store
         self.half_life_hours = half_life_hours
@@ -66,6 +67,8 @@ class EmotionStateService:
         self.offset_half_life_minutes = max(1.0, float(offset_half_life_minutes))
         # 0 disables the stale-attention janitor entirely.
         self.attention_auto_archive_days = max(0.0, float(attention_auto_archive_days))
+        # Negativity bias for user-directed hurtful events (clamped in settlement).
+        self.negative_bias = float(negative_bias)
         self._locks: dict[str, asyncio.Lock] = {}
 
     def _intrinsic(self) -> IntrinsicParams | None:
@@ -97,10 +100,12 @@ class EmotionStateService:
             reasons.extend("attention_stale_archive" for _ in stale_ids)
         if episodic_limit is None:
             episodic_limit = self.episodic_limit
-        updated, episodic_ids = enforce_episodic_capacity(updated, episodic_limit)
+        updated, episodic_ids = enforce_episodic_capacity(
+            updated, episodic_limit, negative_bias=self.negative_bias
+        )
         reasons.extend("episodic_capacity_archive" for _ in episodic_ids)
         updated, psychological_ids = enforce_psychological_capacity(
-            updated, self.psychological_limit
+            updated, self.psychological_limit, negative_bias=self.negative_bias
         )
         reasons.extend("psychological_capacity_archive" for _ in psychological_ids)
         updated, attention_ids = enforce_attention_capacity(
@@ -139,6 +144,7 @@ class EmotionStateService:
                 updated = decay_ledger(
                     updated,
                     half_life_hours=self.half_life_hours,
+                    negative_bias=self.negative_bias,
                     intrinsic=intrinsic,
                     offset_half_life_minutes=self.offset_half_life_minutes,
                 )
@@ -147,7 +153,11 @@ class EmotionStateService:
                         updated, utc_now(), intrinsic
                     )
                     if observation is not None:
-                        updated, applied, _ = apply_observation(updated, observation)
+                        updated, applied, _ = apply_observation(
+                            updated,
+                            observation,
+                            negative_bias=self.negative_bias,
+                        )
                         if applied:
                             await asyncio.to_thread(
                                 self.store.append_audit,
@@ -252,7 +262,11 @@ class EmotionStateService:
                 and ledger.message_watermark != expected_message_watermark
             )
             loaded_event_versions = {event.id: event.version for event in ledger.events}
-            ledger = decay_ledger(ledger, half_life_hours=self.half_life_hours)
+            ledger = decay_ledger(
+                ledger,
+                half_life_hours=self.half_life_hours,
+                negative_bias=self.negative_bias,
+            )
             updated = StateLedger.from_dict(ledger.to_dict(), user_key=user_key)
             reasons: list[str] = []
             applied_count = 0
@@ -347,7 +361,9 @@ class EmotionStateService:
                 observation.message_watermark = max(
                     observation.message_watermark, updated.message_watermark
                 )
-                updated, applied, reason = apply_observation(updated, observation)
+                updated, applied, reason = apply_observation(
+                    updated, observation, negative_bias=self.negative_bias
+                )
                 reasons.append(reason)
                 applied_count += int(applied)
 
@@ -378,7 +394,9 @@ class EmotionStateService:
                         updated.mood.updated_at,
                     )
                 )
-                updated = settle_summary_mood(updated, mood_adjustment)
+                updated = settle_summary_mood(
+                    updated, mood_adjustment, negative_bias=self.negative_bias
+                )
                 after_mood = (
                     updated.mood.valence,
                     updated.mood.energy,
@@ -607,6 +625,7 @@ class EmotionStateService:
                 half_life_hours=self.half_life_hours,
                 intrinsic=intrinsic,
                 offset_half_life_minutes=self.offset_half_life_minutes,
+                negative_bias=self.negative_bias,
             )
             if intrinsic is not None:
                 # Sensitivity multipliers scale how hard one piece of evidence hits.
@@ -618,7 +637,9 @@ class EmotionStateService:
                 )
                 if abs(scaled - observation.intensity) > 1e-6:
                     observation = replace(observation, intensity=clamp(scaled))
-            updated, applied, reason = apply_observation(ledger, observation)
+            updated, applied, reason = apply_observation(
+                ledger, observation, negative_bias=self.negative_bias
+            )
             capacity_reasons: list[str] = []
             if applied:
                 (
@@ -765,6 +786,7 @@ class EmotionStateService:
                 half_life_hours=self.half_life_hours,
                 intrinsic=self._intrinsic(),
                 offset_half_life_minutes=self.offset_half_life_minutes,
+                negative_bias=self.negative_bias,
             )
             updated, capacity_reasons, expired_attention_ids = self._enforce_capacities(
                 updated, now=now

@@ -6,14 +6,19 @@ import vm from "node:vm";
 const dashboardDir = new URL("../pages/dashboard/", import.meta.url);
 const appSource = readFileSync(new URL("app.js", dashboardDir), "utf8");
 const stylesSource = readFileSync(new URL("styles.css", dashboardDir), "utf8");
+const indexSource = readFileSync(new URL("index.html", dashboardDir), "utf8");
 const elementIds = [
   "workspace",
   "empty",
   "session-id",
   "load",
+  "theme",
   "mood-label",
-  "mood-metrics",
+  "hero-h2",
+  "hero-desc",
+  "core-hint",
   "event-count",
+  "ev-total",
   "events",
   "action-status",
   "event-orbits",
@@ -39,6 +44,7 @@ const elementIds = [
   "rule-sample",
   "run-rule",
   "rule-output",
+  "rain",
   "delete-confirm",
   "delete-confirm-message",
   "delete-cancel",
@@ -56,6 +62,7 @@ function createElement(id) {
     innerHTML: "",
     textContent: "",
     dataset: {},
+    style: {},
     classList: {
       remove: (...names) => names.forEach((name) => classes.delete(name)),
       toggle: (name, enabled) => enabled ? classes.add(name) : classes.delete(name),
@@ -64,6 +71,7 @@ function createElement(id) {
     addEventListener: (type, listener) => listeners.set(type, listener),
     dispatch: (type, event) => listeners.get(type)?.(event),
     focus: () => {},
+    appendChild: () => {},
   };
 }
 
@@ -119,12 +127,24 @@ function run(context, source) {
 test("long event rows keep their status controls inside the panel", () => {
   assert.match(
     stylesSource,
-    /\.event-item\s*\{[^}]*grid-template-columns:\s*9px\s+minmax\(0,\s*1fr\)\s+minmax\(82px,\s*96px\)/s,
+    /\.event-item\s*\{[^}]*grid-template-columns:\s*8px\s+minmax\(0,\s*1fr\)\s+auto/s,
   );
   assert.match(stylesSource, /\.event-item\s*>\s*div\s*\{[^}]*min-width:\s*0/s);
   assert.match(stylesSource, /\.event-item strong\s*\{[^}]*overflow-wrap:\s*anywhere/s);
-  assert.match(stylesSource, /\.event-state\s*\{[^}]*min-width:\s*0/s);
+  assert.match(stylesSource, /\.event-state\s*\{[^}]*min-width:\s*86px/s);
   assert.match(stylesSource, /\.delete-item\s*\{[^}]*white-space:\s*nowrap/s);
+});
+
+test("emotion injection views are split into dedicated half-width panels", () => {
+  assert.match(indexSource, /情绪注入 · 历史快照/);
+  assert.match(indexSource, /情绪注入 · 实时预览/);
+  assert.doesNotMatch(indexSource, /injection-grid|injection-view/);
+  assert.doesNotMatch(stylesSource, /injection-grid|injection-view/);
+  assert.match(stylesSource, /\.adv-body\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/s);
+  for (const id of ["refresh-prompt", "prompt-kind", "prompt", "preview-kind", "preview-prompt"]) {
+    const matches = indexSource.match(new RegExp(`id="${id}"`, "g")) || [];
+    assert.equal(matches.length, 1, `id "${id}" 应在 index.html 中恰好出现一次`);
+  }
 });
 
 test("daily review browser handles loading, filtering, and pagination", async () => {
@@ -209,7 +229,11 @@ test("daily review browser handles loading, filtering, and pagination", async ()
   };
   const context = vm.createContext({
     console,
-    document: { getElementById: (id) => elements[id] },
+    document: {
+      getElementById: (id) => elements[id],
+      documentElement: { dataset: {} },
+      createElement: () => ({ style: {}, appendChild: () => {} }),
+    },
     setImmediate,
     setTimeout,
     window: windowObject,

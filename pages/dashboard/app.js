@@ -262,21 +262,87 @@ function eventCategoryLabel(category) {
   })[category] || "心事";
 }
 
+/* ===== 心境三档联动（暖/绷/沉）· 环仪表 · 轨道光点 · 昼夜 ===== */
+const BAND_LINES = {
+  warm:  "此刻她心里是软的，还留着一点没说完的话",
+  tense: "她现在有点绷紧了，像一拧就着的弦",
+  heavy: "她好像把自己折起来了，轻轻的，不敢展开",
+};
+
+function moodBand(mood) {
+  const valence = Number(mood?.valence);
+  const tension = Number(mood?.tension);
+  if (!Number.isFinite(valence) || !Number.isFinite(tension)) return "warm";
+  if (tension >= 0.5) return "tense";
+  if (valence < 0.4) return "heavy";
+  return "warm";
+}
+
+function categoryClass(category) {
+  return ({
+    episodic: "episodic",
+    psychological: "psychological",
+    concrete: "concrete",
+  })[category] || "episodic";
+}
+
 function renderMood(ledger) {
+  const band = moodBand(ledger.mood);
+  document.documentElement.dataset.mood = band;
   $("mood-label").textContent = ledger.mood.label;
-  $("mood-metrics").innerHTML = [
-    ["当前倾向", Number(ledger.mood.valence).toFixed(2)],
-    ["能量", Number(ledger.mood.energy).toFixed(2)],
-    ["紧张", Number(ledger.mood.tension).toFixed(2)],
-  ].map(([label, value]) => `<div class="metric"><span>${label}</span><strong>${value}</strong></div>`).join("");
+  $("hero-h2").textContent = BAND_LINES[band];
+  const activeCount = (Array.isArray(ledger.events) ? ledger.events : [])
+    .filter((item) => item.lifecycle !== "archived").length;
+  const hint = $("core-hint");
+  if (hint) {
+    hint.textContent = activeCount > 0 ? `${activeCount} 条心事在打转` : "心里暂时很安静";
+  }
+  setDial("1", ledger.mood.valence);
+  setDial("2", ledger.mood.energy);
+  setDial("3", ledger.mood.tension);
+  buildRain();
+}
+
+/* 环仪表：数值居中，进度弧 + 末端小亮珠位置由弧度精确计算 */
+function setDial(index, value) {
+  const track = $(`track-${index}`);
+  const dot = $(`dot-${index}`);
+  const val = $(`val-${index}`);
+  if (!track) return;
+  const v = Math.min(1, Math.max(0, Number(value) || 0));
+  const circumference = 2 * Math.PI * 36; // r=36 → 226.19
+  track.style.strokeDashoffset = String(circumference * (1 - v));
+  const degree = v * 360 - 90;
+  const radian = (degree * Math.PI) / 180;
+  dot.setAttribute("cx", String(43 + 36 * Math.cos(radian)));
+  dot.setAttribute("cy", String(43 + 36 * Math.sin(radian)));
+  dot.setAttribute("r", v >= 0.985 ? "0" : "2.8");
+  val.textContent = Number(value).toFixed(2);
+}
+
+function setBodyDial(intimacy) {
+  const effective = Number(intimacy?.body_sensitivity) * 0.45
+    + Number(intimacy?.sexual_arousal) * 0.55;
+  setDial("4", Number.isFinite(effective) ? effective : 0);
 }
 
 function renderEventOrbits(events) {
-  $("event-orbits").innerHTML = events.slice(0, 8).map((_, index) => {
+  const palette = [
+    "var(--accent)",
+    "var(--mint)",
+    "var(--gold)",
+    "var(--lavender)",
+    "var(--rose)",
+    "var(--blue)",
+  ];
+  $("event-orbits").innerHTML = (events || []).slice(0, 8).map((item, index) => {
     const angle = (index / Math.max(events.length, 1)) * Math.PI * 2;
-    const x = 50 + Math.cos(angle) * 40;
-    const y = 50 + Math.sin(angle) * 40;
-    return `<i class="orbit-dot" style="left:${x}%;top:${y}%"></i>`;
+    const x = 50 + Math.cos(angle) * 38;
+    const y = 50 + Math.sin(angle) * 38;
+    const color = palette[index % palette.length];
+    const fact = text(item.fact);
+    const tip = fact.length > 26 ? `${fact.slice(0, 26)}…` : fact;
+    return `<i class="sat" style="left:${x.toFixed(2)}%;top:${y.toFixed(2)}%;background:${color};color:${color}" data-tip="${html(tip)}"></i>`;
   }).join("");
 }
 
@@ -311,10 +377,11 @@ function renderState(payload) {
 
   const events = ledger.events.filter((item) => item.lifecycle !== "archived");
   $("event-count").textContent = `${events.length} 条`;
+  $("ev-total").textContent = String(events.length);
   $("events").innerHTML = events.length ? events.map((item) => `
     <article class="event-item">
-      <i class="event-marker"></i><div><strong>${html(item.fact)}</strong><p>${html(item.emotional_meaning)}</p></div>
-      <span class="event-state"><b>${html(eventCategoryLabel(item.category))}</b>${html(item.lifecycle)}<button class="delete-item" type="button" data-delete-kind="event" data-delete-id="${html(item.id)}" aria-label="删除这条心事" title="删除这条心事">删除</button></span>
+      <i class="event-marker"></i><div><strong>${html(item.fact)}</strong><p class="mean">${html(item.emotional_meaning)}</p></div>
+      <span class="event-state"><b class="etag ${html(categoryClass(item.category))}">${html(eventCategoryLabel(item.category))}</b><em>${html(item.lifecycle)}</em><button class="delete-item" type="button" data-delete-kind="event" data-delete-id="${html(item.id)}" aria-label="删除这条心事" title="删除这条心事">删除</button></span>
     </article>
   `).join("") : `<p class="status-line">暂无持续影响的事情</p>`;
   renderEventOrbits(events);
@@ -325,11 +392,11 @@ function renderState(payload) {
   $("attention-count").textContent = `${attentionItems.length} 条`;
   $("attention-items").innerHTML = attentionItems.length ? attentionItems.map((item) => `
     <article class="event-item">
-      <i class="event-marker"></i><div><strong>${html(item.content)}</strong><p>${html([
+      <i class="event-marker"></i><div><strong>${html(item.content)}</strong><p class="mean">${html([
         item.time_hint || item.due_at,
         item.overdue ? "已到时间但尚无完成证据" : "",
       ].filter(Boolean).join(" · ") || "持续到明确完成、取消或替代")}</p></div>
-      <span class="event-state"><b>${html(item.kind_label || item.kind)}</b>${html(item.status_label || item.status)}<button class="delete-item" type="button" data-delete-kind="attention" data-delete-id="${html(item.item_id)}" aria-label="删除这条待关注事项" title="删除这条待关注事项">删除</button></span>
+      <span class="event-state"><b class="etag attention">${html(item.kind_label || item.kind)}</b><em>${html(item.status_label || item.status)}</em><button class="delete-item" type="button" data-delete-kind="attention" data-delete-id="${html(item.item_id)}" aria-label="删除这条待关注事项" title="删除这条待关注事项">删除</button></span>
     </article>
   `).join("") : `<p class="status-line">暂无待关注事项</p>`;
 
@@ -345,6 +412,10 @@ function renderState(payload) {
     ["身体敏感", intimacy.body_sensitivity],
     ["性唤起", intimacy.sexual_arousal],
   ].map(([label, value]) => `<div class="dimension"><span>${label}</span><i style="--value:${Math.round(Number(value) * 100)}%"></i><b>${Number(value).toFixed(2)}</b></div>`).join("");
+  setBodyDial(intimacy);
+
+  $("hero-desc").textContent =
+    `有效心事 ${events.length} 条 · 待关注 ${attentionItems.length} 项 · 随聊天持续演化`;
 
   renderDiaries();
 
@@ -465,6 +536,40 @@ async function initialize() {
     $("load").disabled = false;
   }
 }
+
+function buildRain() {
+  const rain = $("rain");
+  if (!rain) return;
+  rain.innerHTML = "";
+  const heavy = document.documentElement.dataset.mood === "heavy";
+  rain.style.display = heavy ? "block" : "none";
+  if (!heavy) return;
+  for (let index = 0; index < 36; index += 1) {
+    const drop = document.createElement("i");
+    drop.style.left = `${Math.random() * 100}%`;
+    drop.style.animationDuration = `${2.5 + Math.random() * 3}s`;
+    drop.style.animationDelay = `${Math.random() * 4}s`;
+    drop.style.opacity = String(0.2 + Math.random() * 0.4);
+    rain.appendChild(drop);
+  }
+}
+
+function applyTheme(manual) {
+  const root = document.documentElement;
+  if (!manual) {
+    const hour = new Date().getHours();
+    root.dataset.theme = hour >= 7 && hour < 19 ? "day" : "night";
+  }
+  $("theme").textContent = root.dataset.theme === "night" ? "☀" : "☾";
+}
+
+$("theme").addEventListener("click", () => {
+  const root = document.documentElement;
+  root.dataset.theme = root.dataset.theme === "night" ? "day" : "night";
+  applyTheme(true);
+});
+applyTheme(false);
+buildRain();
 
 $("load").addEventListener("click", initialize);
 $("refresh-prompt").addEventListener("click", loadPrompt);

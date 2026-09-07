@@ -99,9 +99,14 @@ def test_dashboard_uses_ready_bridge_and_separate_query_params() -> None:
     assert "pageSize: 10" in dashboard
     assert 'id="diary-search"' in markup
     assert 'id="diary-month"' in markup
-    assert "连续数值仅供后台诊断，不会注入模型提示词" in markup
-    assert "最近一次模型请求的历史快照（已实际注入）" in markup
-    assert "[hidden] { display: none !important; }" in styles
+    assert 'id="mood-dials"' in markup
+    # 情绪注入的两个视图各自独立成面板，不再挤在同一个双栏卡里
+    assert "情绪注入 · 历史快照" in markup
+    assert "情绪注入 · 实时预览" in markup
+    assert 'id="prompt"' in markup
+    assert 'id="preview-prompt"' in markup
+    assert "injection-grid" not in markup
+    assert "[hidden]{display:none !important}" in styles
 
 
 def test_emotion_commands_keep_group_and_standalone_routes_separate() -> None:

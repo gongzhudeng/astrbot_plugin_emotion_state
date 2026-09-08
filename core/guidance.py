@@ -66,6 +66,40 @@ def time_band(now: datetime) -> str:
     return "凌晨"
 
 
+def relative_when(now: datetime, raw: Any) -> str:
+    """Human-readable relative label for an event timestamp.
+
+    The guidance model gets no clock of its own: without this label it cannot
+    tell "yesterday noon" from "today noon" and blurs past events into the
+    current moment. Returns "" when the timestamp is missing or unparseable.
+    """
+    if isinstance(raw, datetime):
+        try:
+            moment = raw.astimezone()
+        except (TypeError, ValueError, OSError):
+            return ""
+    else:
+        text = str(raw or "").strip()
+        if not text:
+            return ""
+        if text.endswith(("Z", "z")):
+            text = text[:-1] + "+00:00"
+        try:
+            moment = datetime.fromisoformat(text).astimezone()
+        except (TypeError, ValueError, OSError):
+            return ""
+    days = (now.astimezone().date() - moment.date()).days
+    if days == 0:
+        prefix = "今天"
+    elif days == 1:
+        prefix = "昨天"
+    elif 1 < days < 7:
+        prefix = f"{days}天前"
+    else:
+        prefix = f"{moment.month}月{moment.day}日"
+    return f"{prefix} {moment.strftime('%H:%M')}（{time_band(moment)}）"
+
+
 def needs_guidance(
     ledger: StateLedger,
     *,
@@ -163,6 +197,7 @@ def build_guidance_prompt(
         {
             "fact": event.fact,
             "meaning": event.emotional_meaning,
+            "when": relative_when(now, event.created_at),
             "valence": round(event.valence, 2),
             "intensity": round(event.intensity, 2),
         }
@@ -208,6 +243,10 @@ def build_guidance_prompt(
         "具体怎么说由角色的人格和说话习惯自己决定。"
         f"\n- 每个字段不超过 {max(20, int(max_chars))} 字，宁短勿长。"
         "\n- 不要编造材料里没有的事实。"
+        "\n- 提到原因时必须写出具体的事实内容（引用 top_events 里的 fact 本身），"
+        "禁止用“事件1”“事件3”“之前那件事”这类编号或指代——读建议的人看不到完整的事件清单。"
+        "\n- 每件事的发生时间以材料里的 when 为准，表述时写明（如“昨天中午”），"
+        "不得把早前发生的事说成今天或刚刚发生。"
         + style_line
         + f"材料：{json.dumps(payload, ensure_ascii=False)}"
     )

@@ -402,6 +402,26 @@ def test_guidance_prompt_embeds_style_and_events() -> None:
     assert "不要写具体台词或原话" in prompt
 
 
+def test_guidance_prompt_labels_event_time() -> None:
+    """Events carry a relative-time label so past events are never read as today."""
+    ledger = _sad_ledger()
+    yesterday_noon = datetime.now().astimezone().replace(
+        hour=12, minute=30, second=0, microsecond=0
+    ) - timedelta(days=1)
+    ledger.events.append(
+        InnerEvent(
+            fact="他中午说话有点欠",
+            emotional_meaning="有点懊恼",
+            lifecycle="active",
+            created_at=yesterday_noon.isoformat(),
+        )
+    )
+    prompt = build_guidance_prompt(ledger, now=datetime.now().astimezone())
+    assert "昨天 12:30" in prompt
+    # The model is told to spell out concrete facts, never "事件N" references.
+    assert "禁止用“事件1”" in prompt
+
+
 def test_local_guidance_fallback_mentions_reason() -> None:
     ledger = _sad_ledger()
     ledger.events.append(

@@ -43,12 +43,17 @@ from .core.guidance import (
 )
 from .core.image_renderer import EmotionStateImageRenderer
 from .core.injector import (
+    BLOCK_START,
     InjectionOptions,
     InjectionSnapshot,
+    build_guidance_part,
     build_injection_content,
     build_snapshot,
     capture_injection_snapshot,
+    capture_injection_snapshot_from_content,
     inject_prompt,
+    remove_injected_block,
+    replace_injected_block,
     request_source,
 )
 from .core.intimacy import (
@@ -175,7 +180,7 @@ def _require_json_object(raw: str) -> dict[str, Any]:
     PLUGIN_NAME,
     "灵犀 · 内心世界",
     "私聊专用的连续情绪、心事、每日回顾与亲密状态系统。",
-    "v0.3.7",
+    "v0.3.8",
     "https://github.com/gongzhudeng/astrbot_plugin_emotion_state",
 )
 class EmotionStatePlugin(Star):
@@ -299,6 +304,66 @@ class EmotionStatePlugin(Star):
             guidance_strength=self._float_config("expression_strength", 1.0),
             now=datetime.now().astimezone(),
         )
+
+    _INJECTION_TARGETS = {
+        "system": "system",
+        "system_prompt": "system",
+        "系统": "system",
+        "系统提示词": "system",
+        "系统提示词末尾": "system",
+        "user": "user",
+        "extra_user_content": "user",
+        "临时用户上下文": "user",
+        "临时用户上下文末尾": "user",
+        "split": "split",
+        "拆分": "split",
+        "拆分（状态留系统，建议进用户）": "split",
+    }
+
+    _TEMP_PART_MARKERS = (
+        BLOCK_START,
+        "<emotion_state_rules>",
+        "<emotion_state_snapshot>",
+        "<emotion_state_guidance>",
+    )
+
+    def _injection_target(self) -> str:
+        """Resolve where the inner-world block goes; unknown values keep system."""
+        raw = str(self._config("emotion_injection_target", "系统提示词末尾")).strip()
+        return self._INJECTION_TARGETS.get(raw.casefold(), "system")
+
+    def _drop_temp_parts(self, req: ProviderRequest) -> None:
+        """Drop parts this plugin appended before, keeping injection idempotent."""
+        parts = getattr(req, "extra_user_content_parts", None)
+        if not isinstance(parts, list):
+            return
+        kept = [
+            part
+            for part in parts
+            if not any(
+                marker in str(getattr(part, "text", "") or "")
+                for marker in self._TEMP_PART_MARKERS
+            )
+        ]
+        if len(kept) != len(parts):
+            parts[:] = kept
+
+    def _append_temp_part(self, req: ProviderRequest, text: str) -> bool:
+        """Append temporary user context; False means this environment can't."""
+        content = str(text or "").strip()
+        if not content:
+            return True
+        parts = getattr(req, "extra_user_content_parts", None)
+        if not isinstance(parts, list):
+            return False
+        try:
+            from astrbot.core.agent.message import TextPart
+
+            parts.append(TextPart(text=content).mark_as_temp())
+        except Exception as exc:
+            logger.warning(f"[EmotionState] 临时用户上下文注入不可用: {exc}")
+            return False
+        return True
 
     @staticmethod
     def _is_private(event: AstrMessageEvent) -> bool:
@@ -494,19 +559,81 @@ class EmotionStatePlugin(Star):
         if not key:
             return
         ledger = await self.service.get(key)
-        req.system_prompt = inject_prompt(
-            req.system_prompt or "",
-            ledger,
-            self._int_config("max_injected_events", 2),
-            self._attention_injection_limit(),
-            self._injection_rules_text(),
-            options=self._injection_options(),
-        )
-        snapshot = capture_injection_snapshot(
-            req.system_prompt,
-            ledger,
-            source=request_source(event),
-        )
+        max_events = self._int_config("max_injected_events", 2)
+        max_attention = self._attention_injection_limit()
+        rules_text = self._injection_rules_text()
+        options = self._injection_options()
+        source = request_source(event)
+        target = self._injection_target()
+
+        if target == "system":
+            req.system_prompt = inject_prompt(
+                req.system_prompt or "",
+                ledger,
+                max_events,
+                max_attention,
+                rules_text,
+                options=options,
+            )
+            snapshot = capture_injection_snapshot(
+                req.system_prompt,
+                ledger,
+                source=source,
+            )
+        else:
+            # Leaving the system prompt: clear any block left by an earlier run.
+            req.system_prompt = remove_injected_block(req.system_prompt or "")
+            self._drop_temp_parts(req)
+
+            system_content = ""
+            user_content = ""
+            if target == "split":
+                system_content = build_injection_content(
+                    ledger,
+                    max_events,
+                    max_attention,
+                    rules_text,
+                    options=options,
+                    include_guidance=False,
+                )
+                user_content = build_guidance_part(ledger, options=options)
+            else:
+                user_content = build_injection_content(
+                    ledger,
+                    max_events,
+                    max_attention,
+                    rules_text,
+                    options=options,
+                )
+
+            if system_content:
+                req.system_prompt = replace_injected_block(
+                    req.system_prompt or "", system_content
+                )
+            if self._append_temp_part(req, user_content):
+                snapshot = capture_injection_snapshot_from_content(
+                    "\n\n".join(
+                        part for part in (system_content, user_content) if part
+                    ),
+                    ledger,
+                    source=source,
+                )
+            else:
+                # No temporary user context available: fall back so nothing drops.
+                req.system_prompt = inject_prompt(
+                    req.system_prompt or "",
+                    ledger,
+                    max_events,
+                    max_attention,
+                    rules_text,
+                    options=options,
+                )
+                snapshot = capture_injection_snapshot(
+                    req.system_prompt,
+                    ledger,
+                    source=source,
+                )
+
         self._last_injected_prompt[key] = snapshot.prompt
         self._last_injection_snapshot[key] = snapshot
 

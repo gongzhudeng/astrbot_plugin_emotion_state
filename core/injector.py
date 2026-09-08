@@ -114,6 +114,42 @@ def extract_injected_block(prompt: str) -> str:
     return match.group(0).strip() if match else ""
 
 
+def remove_injected_block(prompt: str) -> str:
+    """Strip this plugin's managed block, leaving other system content intact.
+
+    Used when the injection target moves away from the system prompt so a
+    previous block does not linger after the configuration changes.
+    """
+    pattern = (
+        rf"(?:\r?\n)*{re.escape(BLOCK_START)}"
+        rf".*?{re.escape(BLOCK_END)}(?:\r?\n)*"
+    )
+    return re.sub(pattern, "\n\n", prompt or "", flags=re.DOTALL).rstrip()
+
+
+def capture_injection_snapshot_from_content(
+    content: str,
+    ledger: StateLedger,
+    *,
+    source: str,
+    generated_at: str | None = None,
+) -> InjectionSnapshot:
+    """Snapshot content that never lived inside the system prompt.
+
+    The markers are added here so ``marker_complete`` keeps the exact meaning
+    it has in the system-prompt path.
+    """
+    body = str(content or "").strip()
+    wrapped = f"{BLOCK_START}\n{body}\n{BLOCK_END}" if body else ""
+    return capture_injection_snapshot(
+        wrapped, ledger, source=source, generated_at=generated_at
+    )
+
+
+# Public alias: the private helper is the canonical idempotent replacer.
+replace_injected_block = _replace_block
+
+
 def build_snapshot(
     ledger: StateLedger,
     max_events: int = 2,
@@ -192,6 +228,40 @@ def build_snapshot(
     return "\n".join(lines)
 
 
+def build_guidance_part(
+    ledger: StateLedger,
+    *,
+    options: InjectionOptions | None = None,
+) -> str:
+    """Return only the reply-suggestion block, or "" when it is gated off.
+
+    Split out so callers can place the suggestion apart from the state
+    snapshot while reusing the exact same gating (enabled / when_needed /
+    strength <= 0).
+    """
+    opts = options or InjectionOptions()
+    if not opts.guidance_enabled:
+        return ""
+    guidance = ledger.expression_guidance
+    if guidance is None:
+        return ""
+    gate_open = not opts.guidance_when_needed or needs_guidance(
+        ledger,
+        night_hours=opts.night_hours,
+        now=opts.current_time(),
+    )
+    if not gate_open:
+        return ""
+    return format_guidance_block(
+        {
+            "tone": guidance.tone,
+            "can_say": guidance.can_say,
+            "avoid": guidance.avoid,
+        },
+        strength=opts.guidance_strength,
+    )
+
+
 def build_injection_content(
     ledger: StateLedger,
     max_events: int = 2,
@@ -199,6 +269,7 @@ def build_injection_content(
     rules_text: str | None = None,
     *,
     options: InjectionOptions | None = None,
+    include_guidance: bool = True,
 ) -> str:
     opts = options or InjectionOptions()
     parts: list[str] = []
@@ -211,25 +282,10 @@ def build_injection_content(
         if configured:
             parts.append(f"<emotion_state_rules>\n{configured}\n</emotion_state_rules>")
     parts.append(build_snapshot(ledger, max_events, max_attention_items, options=opts))
-    if opts.guidance_enabled:
-        guidance = ledger.expression_guidance
-        if guidance is not None:
-            gate_open = not opts.guidance_when_needed or needs_guidance(
-                ledger,
-                night_hours=opts.night_hours,
-                now=opts.current_time(),
-            )
-            if gate_open:
-                block = format_guidance_block(
-                    {
-                        "tone": guidance.tone,
-                        "can_say": guidance.can_say,
-                        "avoid": guidance.avoid,
-                    },
-                    strength=opts.guidance_strength,
-                )
-                if block:
-                    parts.append(block)
+    if include_guidance:
+        block = build_guidance_part(ledger, options=opts)
+        if block:
+            parts.append(block)
     return "\n".join(parts)
 
 

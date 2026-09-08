@@ -397,12 +397,30 @@ def derive_mood(
     strongest = max((weight for _, weight in weighted), default=0.0)
     target_valence = clamp(evidence_valence, -1.0, 1.0)
     valence = clamp(prior.valence * 0.55 + target_valence * 0.45, -1.0, 1.0)
+    # Tension is a weighted AVERAGE over active evidence, not a sum: a dozen
+    # concurrent sweet moments are a busy heart, not an alarm state. Extra
+    # concurrent events add only a small crowd bonus, and the target stays
+    # low unless real negative evidence is present.
+    crowd_bonus = 0.02 * (len(weighted) - 1) if weighted else 0.0
+    tension_cap = 0.75 if any(event.valence < 0 for event, _ in weighted) else 0.35
     tension_target = clamp(
-        sum(
-            weight * (0.75 if event.valence < 0 else 0.18) for event, weight in weighted
+        (
+            sum(
+                weight * (0.75 if event.valence < 0 else 0.18)
+                for event, weight in weighted
+            )
+            / total
+            if total
+            else 0.0
         )
+        + crowd_bonus,
+        0.0,
+        tension_cap,
     )
-    tension = clamp(prior.tension * 0.6 + tension_target * 0.4)
+    # Clamp a legacy inflated prior so a saturated value converges back
+    # within one settlement instead of self-sustaining.
+    prior_tension = min(prior.tension, max(tension_target * 1.5, 0.35))
+    tension = clamp(prior_tension * 0.6 + tension_target * 0.4)
     energy = clamp(0.42 + strongest * 0.28 - tension * 0.12)
     label = mood_label(valence, tension, energy)
     confidence = clamp(0.45 + min(total, 1.5) * 0.3)
@@ -555,9 +573,11 @@ def mood_label(
         return "夜晚感伤"
     if valence <= -0.18:
         return "有些在意"
-    if valence >= 0.6 and energy >= 0.6:
+    # Positive labels require the body to actually feel at ease: with the
+    # inner thread still taut, happiness reads as toned-down warmth at most.
+    if valence >= 0.6 and energy >= 0.6 and tension < 0.6:
         return "雀跃"
-    if valence >= 0.5 and energy >= 0.5:
+    if valence >= 0.5 and energy >= 0.5 and tension < 0.6:
         return "明快开心"
     if valence >= 0.2:
         return "温和愉快"

@@ -1016,3 +1016,73 @@ def test_extract_json_payload_cleans_and_rejects() -> None:
         extract_json_payload("")
     with pytest.raises((ValueError, json.JSONDecodeError)):
         extract_json_payload("502 Upstream service temporarily unavailable")
+
+
+# ---------------------------------------------------------------------------
+# v0.3.10: tension no longer saturates from summed event targets
+# ---------------------------------------------------------------------------
+
+
+def _positive_event(idx: int) -> InnerEvent:
+    return InnerEvent(
+        fact=f"甜蜜小事 {idx}",
+        emotional_meaning="很开心",
+        target="user",
+        valence=0.75,
+        intensity=0.5,
+        confidence=0.9,
+        lifecycle="active",
+    )
+
+
+def test_tension_positive_crowd_stays_mild() -> None:
+    """A dozen sweet moments are a busy heart, not an alarm state."""
+    from astrbot_plugin_emotion_state.core.models import MoodState
+    from astrbot_plugin_emotion_state.core.settlement import derive_mood
+
+    events = [_positive_event(i) for i in range(12)]
+    mood = derive_mood(events, previous=MoodState(valence=0.6, energy=0.5, tension=0.3))
+    assert mood.tension < 0.5
+    assert mood.label == "明快开心"
+
+
+def test_tension_legacy_prior_converges_in_one_settlement() -> None:
+    """A saturated legacy value (v0.3.9 bug) snaps back below the tense band."""
+    from astrbot_plugin_emotion_state.core.models import MoodState
+    from astrbot_plugin_emotion_state.core.settlement import derive_mood
+
+    events = [_positive_event(i) for i in range(12)]
+    stuck = MoodState(valence=0.61, energy=0.52, tension=0.999, label="明快开心")
+    mood = derive_mood(events, previous=stuck)
+    assert mood.tension < 0.5
+    assert mood.label in {"明快开心", "温和愉快"}
+
+
+def test_tension_negative_evidence_still_bites() -> None:
+    """One user-directed hurt among sweetness still lands in the tense band."""
+    from astrbot_plugin_emotion_state.core.settlement import derive_mood
+
+    hurt = InnerEvent(
+        fact="我开玩笑说不稀罕他的照片，他当真了，很难过",
+        emotional_meaning="伤到了他",
+        target="user",
+        valence=-0.8,
+        intensity=0.66,
+        confidence=0.9,
+        lifecycle="active",
+    )
+    events = [hurt] + [_positive_event(i) for i in range(3)]
+    mood = derive_mood(events)
+    for _ in range(6):
+        mood = derive_mood(events, previous=mood)
+    assert mood.tension >= 0.5
+    assert mood.label not in {"雀跃", "明快开心"}
+
+
+def test_mood_label_positive_requires_calm_body() -> None:
+    """Happy labels need the body at ease; a taut thread downgrades the label."""
+    from astrbot_plugin_emotion_state.core.settlement import mood_label
+
+    assert mood_label(0.7, 0.65, 0.7) == "温和愉快"  # 雀跃 gated by tension
+    assert mood_label(0.52, 0.59, 0.52) == "明快开心"  # just under the gate
+    assert mood_label(0.52, 0.6, 0.52) == "温和愉快"  # gate boundary

@@ -125,10 +125,15 @@ button:disabled{cursor:not-allowed;opacity:.45}
 /* ---------- 顶栏 ---------- */
 .topbar{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:22px 28px 18px}
 .brand{display:flex;align-items:center;gap:13px;min-width:0}
-.mark{width:42px;height:42px;flex:0 0 auto;border-radius:50%;display:grid;place-items:center;font-size:17px;
+/* 品牌圆：显示插件根目录 logo.png 的同步副本（pages/dashboard/logo.png，由 main.py 加载时自动同步）；
+   渐变底 + "心"字仅作图片未就绪时的兜底 */
+.mark{position:relative;width:42px;height:42px;flex:0 0 auto;border-radius:50%;overflow:hidden;
+  display:grid;place-items:center;font-size:17px;
   background:linear-gradient(135deg,var(--rose),var(--lavender));color:#fff;
   box-shadow:0 0 0 6px rgba(214,122,150,.12),0 10px 26px rgba(214,122,150,.3);
-  transition:background 1.2s,box-shadow 1.2s}
+  transition:box-shadow 1.2s}
+.mark .mark-logo{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:50%;
+  display:block;-webkit-user-drag:none;user-drag:none}
 .brand h1{margin:0;font-size:22px;font-weight:600;letter-spacing:.04em;white-space:nowrap}
 .brand p{margin:0 0 1px;font-size:10px;letter-spacing:.3em;color:var(--sub);white-space:nowrap}
 .tools{display:flex;gap:9px;align-items:center;flex-wrap:wrap}
@@ -152,10 +157,12 @@ pre{margin:10px 0 0;padding:13px 15px;border-radius:14px;background:var(--glass-
 .hero{position:relative;overflow:hidden;border-radius:30px;padding:40px 32px 34px;text-align:center;
   min-height:410px;display:flex;flex-direction:column;align-items:center;justify-content:center;
   margin-top:6px}
+/* 心跳光晕：作为 .stage 的第一个子元素，以圆球中心为锚点居中（之前挂在 hero 大卡上，
+   卡内下方还有诗句/指标环，导致光晕整体偏下）。hero 的 overflow:hidden 继续裁掉超出部分 */
 .hero-glow{position:absolute;width:520px;height:520px;border-radius:50%;top:50%;left:50%;
   transform:translate(-50%,-50%);pointer-events:none;
   background:radial-gradient(circle,var(--halo-1) 0%,transparent 68%);opacity:.5;
-  animation:glowbeat var(--hb-dur) ease-in-out infinite, jitter calc(.6s + var(--jitter)) steps(2) infinite}
+  animation:glowbeat var(--hb-dur) ease-in-out infinite}
 @keyframes glowbeat{
   0%,100%{opacity:.34;transform:translate(-50%,-50%) scale(.94)}
   7%{opacity:.58;transform:translate(-50%,-50%) scale(calc(.94 + (var(--hb-amp) - 1) * 1.6))}

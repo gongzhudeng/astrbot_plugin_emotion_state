@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
+import shutil
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -95,6 +97,38 @@ from .core.text_limits import EVENT_FACT_STORAGE_CHARS, bound_complete_text
 
 PLUGIN_NAME = "astrbot_plugin_emotion_state"
 
+PAGE_LOGO_RELPATH = Path("pages") / "dashboard" / "logo.png"
+
+
+def _file_digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def sync_plugin_logo(plugin_root: Path, target_path: Path) -> bool:
+    """Copy the plugin-root logo into the WebUI page directory.
+
+    The plugin-page asset loader only serves files inside ``pages/<page>/``,
+    so the brand mark cannot reference the root ``logo.png`` directly. This
+    keeps a mirror copy that follows the plugin icon: replace the root logo
+    and reload the plugin (or restart AstrBot) to propagate the change.
+    Returns True only when a fresh copy was written.
+    """
+    source = plugin_root / "logo.png"
+    try:
+        if not source.is_file():
+            return False
+        if target_path.is_file() and (
+            target_path.stat().st_size == source.stat().st_size
+            and _file_digest(target_path) == _file_digest(source)
+        ):
+            return False
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target_path)
+        return True
+    except OSError as exc:
+        logger.warning(f"[EmotionState] 同步插件图标到 WebUI 失败：{exc}")
+        return False
+
 
 def extract_json_payload(text: str) -> Any:
     """Extract the first JSON object/array from a raw model response.
@@ -141,7 +175,7 @@ def _require_json_object(raw: str) -> dict[str, Any]:
     PLUGIN_NAME,
     "灵犀 · 内心世界",
     "私聊专用的连续情绪、心事、每日回顾与亲密状态系统。",
-    "v0.3.5",
+    "v0.3.7",
     "https://github.com/gongzhudeng/astrbot_plugin_emotion_state",
 )
 class EmotionStatePlugin(Star):
@@ -170,7 +204,9 @@ class EmotionStatePlugin(Star):
         )
         self.rules = LocalRuleEngine(self._list_config("custom_rules"))
         self.gateway = ProviderGateway(context, config)
-        self.image_renderer = EmotionStateImageRenderer(Path(__file__).resolve().parent)
+        self.plugin_root = Path(__file__).resolve().parent
+        self.image_renderer = EmotionStateImageRenderer(self.plugin_root)
+        sync_plugin_logo(self.plugin_root, self.plugin_root / PAGE_LOGO_RELPATH)
         self._last_injected_prompt: dict[str, str] = {}
         self._last_injection_snapshot: dict[str, InjectionSnapshot] = {}
         self._review_tasks: set[asyncio.Task[Any]] = set()

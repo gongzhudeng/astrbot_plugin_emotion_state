@@ -26,7 +26,7 @@ from astrbot_plugin_emotion_state.core.models import (
     StateLedger,
 )
 from astrbot_plugin_emotion_state.core.provider_gateway import ProviderGateway
-from astrbot_plugin_emotion_state.main import EmotionStatePlugin
+from astrbot_plugin_emotion_state.main import EmotionStatePlugin, sync_plugin_logo
 from quart import Quart
 
 from astrbot.core.provider.entities import ProviderRequest
@@ -76,6 +76,28 @@ def test_prompt_order_is_stable_for_both_hook_execution_orders() -> None:
     assert_final_prompt_order(emotion_first)
     assert busy_inject(emotion_first) == emotion_first
     assert inject_prompt(busy_first, ledger) == busy_first
+
+
+def test_plugin_logo_syncs_into_dashboard_page(tmp_path: Path) -> None:
+    root = tmp_path / "plugin"
+    root.mkdir()
+    target = tmp_path / "pages" / "dashboard" / "logo.png"
+
+    # 图标缺失时静默跳过
+    assert sync_plugin_logo(root, target) is False
+
+    # 首次同步：写入副本
+    (root / "logo.png").write_bytes(b"logo-v1")
+    assert sync_plugin_logo(root, target) is True
+    assert target.read_bytes() == b"logo-v1"
+
+    # 内容一致时不重复写
+    assert sync_plugin_logo(root, target) is False
+
+    # 插件图标更新后（即使体积不同）重新同步
+    (root / "logo.png").write_bytes(b"logo-v2-with-a-longer-payload")
+    assert sync_plugin_logo(root, target) is True
+    assert target.read_bytes() == b"logo-v2-with-a-longer-payload"
 
 
 def test_dashboard_uses_ready_bridge_and_separate_query_params() -> None:

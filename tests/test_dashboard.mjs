@@ -147,6 +147,27 @@ test("emotion injection views are split into dedicated half-width panels", () =>
   }
 });
 
+test("brand mark shows the synced plugin logo with a text fallback", () => {
+  assert.match(indexSource, /class="mark-logo"\s+src="\.\/logo\.png"/);
+  assert.match(indexSource, /class="mark-fallback"/);
+  assert.match(stylesSource, /\.mark\s*\{[^}]*overflow:\s*hidden/s);
+  assert.match(stylesSource, /\.mark \.mark-logo\s*\{[^}]*object-fit:\s*cover/s);
+  assert.match(stylesSource, /\.mark \.mark-logo\s*\{[^}]*border-radius:\s*50%/s);
+});
+
+test("heartbeat glow anchors to the mood stage, not the hero card", () => {
+  const stageIdx = indexSource.indexOf('<div class="stage"');
+  const glowIdx = indexSource.indexOf('class="hero-glow"');
+  const ringIdx = indexSource.indexOf('class="ring r1"');
+  assert.ok(stageIdx !== -1, "stage 容器必须存在");
+  assert.ok(glowIdx > stageIdx && glowIdx < ringIdx, "hero-glow 应是 stage 的第一个子元素");
+  assert.match(
+    stylesSource,
+    /\.hero-glow\s*\{[^}]*animation:glowbeat\s+var\(--hb-dur\)\s+ease-in-out infinite\}/s,
+    "hero-glow 只应保留 glowbeat 动画",
+  );
+});
+
 test("daily review browser handles loading, filtering, and pagination", async () => {
   const elements = Object.fromEntries(elementIds.map((id) => [id, createElement(id)]));
   const payload = {

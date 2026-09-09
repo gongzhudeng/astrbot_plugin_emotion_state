@@ -129,6 +129,15 @@ def test_dashboard_uses_ready_bridge_and_separate_query_params() -> None:
     assert 'id="preview-prompt"' in markup
     assert "injection-grid" not in markup
     assert "[hidden]{display:none !important}" in styles
+    # 回复建议面板：右列第三行，占用待关注事项下方空区
+    assert 'id="guidance-state"' in markup
+    assert 'id="guidance-tone"' in markup
+    assert 'id="guidance-rows"' in markup
+    assert 'id="guidance-note"' in markup
+    assert "guidance-card" in markup
+    assert "renderGuidance" in dashboard
+    assert r".guidance-card" in styles
+    assert "grid-template-rows:auto auto minmax(0,1fr)" in styles
 
 
 def test_emotion_commands_keep_group_and_standalone_routes_separate() -> None:

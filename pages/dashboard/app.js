@@ -367,6 +367,42 @@ function bodyReactionStage(intimacy) {
   return "not_noticeable";
 }
 
+function renderGuidance(diagnostics) {
+  const data = diagnostics?.expression_guidance || {};
+  const tone = text(data.tone).trim();
+  const canSay = text(data.can_say).trim();
+  const avoid = text(data.avoid).trim();
+  const hasContent = Boolean(tone);
+  const stateLabel = hasContent
+    ? (data.will_inject ? "已激活" : "已生成 · 待注入")
+    : (data.regime ? "缓存中" : "未生成");
+
+  $("guidance-state").textContent = stateLabel;
+  $("guidance-tone").textContent = tone || "此刻内心平静，按人格正常聊即可。";
+
+  const rows = [
+    ["可以流露", canSay, !canSay],
+    ["避免", avoid, !avoid],
+  ];
+  $("guidance-rows").innerHTML = rows.map(([label, value, empty]) => `
+    <div class="guidance-row${empty ? " empty" : ""}">
+      <span class="lb">${html(label)}</span>
+      <span class="val">${empty ? "（无）" : html(value)}</span>
+    </div>
+  `).join("");
+
+  const generatedAt = text(data.generated_at).trim();
+  const trigger = text(data.trigger).trim();
+  const source = data.model_generated ? "模型生成" : (hasContent ? "内嵌兜底" : "—");
+  const bits = [];
+  bits.push(source);
+  if (trigger) bits.push(`触发：${trigger}`);
+  if (generatedAt) bits.push(`更新于 ${formatBeijingTime(generatedAt)}`);
+  $("guidance-note").innerHTML = hasContent
+    ? `回复建议 · ${bits.join(" · ")}${data.will_inject ? "" : " · 当前不会注入"}`
+    : "回复建议 · 内心平静，未生成具体表达建议";
+}
+
 function renderState(payload) {
   const ledger = payload.ledger;
   state.data = payload;
@@ -420,6 +456,7 @@ function renderState(payload) {
   renderDiaries();
 
   const diagnostics = payload.diagnostics || {};
+  renderGuidance(diagnostics);
   $("diagnostics").innerHTML = [
     ["Busy Schedule", diagnostics.busy_schedule ? "已连接" : "未连接"],
     ["LivingMemory", diagnostics.livingmemory ? "已连接" : "未连接"],

@@ -27,6 +27,11 @@ const elementIds = [
   "intimacy-stage",
   "intimacy-tier",
   "intimacy",
+  "guidance-state",
+  "guidance-tone",
+  "guidance-rows",
+  "guidance-note",
+  "guidance-block",
   "diary-count",
   "diaries",
   "diary-detail",
@@ -145,6 +150,163 @@ test("emotion injection views are split into dedicated half-width panels", () =>
     const matches = indexSource.match(new RegExp(`id="${id}"`, "g")) || [];
     assert.equal(matches.length, 1, `id "${id}" 应在 index.html 中恰好出现一次`);
   }
+});
+
+test("guidance panel sits under attention items in the right column", () => {
+  // 待关注事项的面板必须在回复建议之前；两个面板都在 .right-col 里
+  const fillcardIdx = indexSource.indexOf('class="glass panel fillcard"');
+  const guidanceIdx = indexSource.indexOf('class="glass panel guidance-card"');
+  assert.ok(fillcardIdx !== -1, "待关注事项面板应存在");
+  assert.ok(guidanceIdx !== -1, "回复建议面板应存在");
+  assert.ok(
+    guidanceIdx > fillcardIdx,
+    "回复建议面板应位于待关注事项之后",
+  );
+  // 右列当前是三行：身体反应 auto / 待关注 auto / 回复建议 1fr
+  assert.match(
+    stylesSource,
+    /\.right-col\s*\{[^}]*grid-template-rows:\s*auto\s+auto\s+minmax\(0,\s*1fr\)/s,
+  );
+  // 新的样式钩子都到位（玻璃盒、左竖线、注脚虚线分隔）
+  assert.match(stylesSource, /\.guidance-card\b/);
+  assert.match(stylesSource, /\.guidance\s+\.stage\b[^}]*border-left:/s);
+  assert.match(stylesSource, /\.guidance-row\b/);
+  assert.match(stylesSource, /\.guidance-note\b[^}]*border-top:\s*1px dashed/s);
+  // JS 渲染入口
+  assert.match(appSource, /function\s+renderGuidance\s*\(/);
+  assert.match(appSource, /renderGuidance\(diagnostics\)/);
+});
+
+async function exerciseGuidance(payload) {
+  const elements = Object.fromEntries(elementIds.map((id) => [id, createElement(id)]));
+  const apiCalls = [];
+  const context = vm.createContext({
+    console,
+    document: {
+      getElementById: (id) => elements[id],
+      documentElement: { dataset: {} },
+      createElement: () => ({ style: {}, appendChild: () => {} }),
+    },
+    setImmediate,
+    setTimeout,
+    window: {
+      AstrBotPluginPage: {
+        ready: async () => {},
+        apiGet: async (path) => {
+          apiCalls.push(path);
+          if (path === "page/sessions") {
+            return { status: "ok", data: { sessions: [{ session_id: "private:test" }] } };
+          }
+          if (path === "page/state") {
+            return { status: "ok", data: payload };
+          }
+          if (path === "page/injection") {
+            return {
+              status: "ok",
+              data: {
+                kind: "preview",
+                prompt: "",
+                current_state_version: 9,
+                actual: { prompt: "", state_version: 0, generated_at: "", request_source: "", marker_complete: false, stale: false },
+                preview: { prompt: "", state_version: 9, generated_at: "", request_source: "preview", marker_complete: false, stale: false },
+              },
+            };
+          }
+          throw new Error(`Unexpected GET ${path}`);
+        },
+        apiPost: async () => ({ status: "ok", data: {} }),
+      },
+      localStorage: { getItem: () => "", setItem: () => {} },
+      setTimeout: (callback, milliseconds) => {
+        if (milliseconds >= 1000) return 0;
+        return setTimeout(callback, milliseconds);
+      },
+    },
+  });
+  vm.runInContext(appSource, context, { filename: "app.js" });
+  for (let i = 0; i < 30; i += 1) await new Promise((resolve) => setImmediate(resolve));
+  context.__apiCalls = apiCalls;
+  return { elements, context, apiCalls };
+}
+
+test("guidance panel renders tone, can_say, avoid with injection state", async () => {
+  const generatedAt = "2026-09-09T05:30:00+00:00";
+  const { elements, apiCalls } = await exerciseGuidance({
+    ledger: ledger([]),
+    presentation: {
+      persona_intimacy_tier: "很亲密",
+      body_reaction_stage: "身体平静，没有明显性反应",
+      attention_items: [],
+    },
+    diagnostics: {
+      expression_guidance: {
+        tone: "语气放轻放慢，可以自然说出心情",
+        can_say: "被问到就慢慢说原因",
+        avoid: "别硬撑",
+        generated_at: generatedAt,
+        regime: "明快开心|mild|",
+        trigger: "regime_change",
+        model_generated: true,
+        will_inject: true,
+      },
+    },
+  });
+  assert.equal(
+    elements["guidance-state"].textContent,
+    "已激活",
+  );
+  assert.equal(
+    elements["guidance-tone"].textContent,
+    "语气放轻放慢，可以自然说出心情",
+  );
+  assert.match(elements["guidance-rows"].innerHTML, /可以流露/);
+  assert.match(elements["guidance-rows"].innerHTML, /被问到就慢慢说原因/);
+  assert.match(elements["guidance-rows"].innerHTML, /避免/);
+  assert.match(elements["guidance-rows"].innerHTML, /别硬撑/);
+  assert.doesNotMatch(elements["guidance-rows"].innerHTML, /（无）/);
+  assert.match(elements["guidance-note"].innerHTML, /回复建议/);
+  assert.match(elements["guidance-note"].innerHTML, /模型生成/);
+  assert.match(elements["guidance-note"].innerHTML, /触发：regime_change/);
+  assert.match(
+    elements["guidance-note"].innerHTML,
+    /2026-09-09 13:30:00/,
+    "时间应被转成北京时间 UTC+08:00",
+  );
+  assert.doesNotMatch(elements["guidance-note"].innerHTML, /当前不会注入/);
+  assert.ok(apiCalls.includes("page/state"), "page/state API 必被调用");
+});
+
+test("guidance panel falls back to a calm placeholder when no tone is cached", async () => {
+  const { elements } = await exerciseGuidance({
+    ledger: ledger([]),
+    presentation: {
+      persona_intimacy_tier: "很亲密",
+      body_reaction_stage: "身体平静，没有明显性反应",
+      attention_items: [],
+    },
+    diagnostics: {
+      expression_guidance: {
+        tone: "",
+        can_say: "",
+        avoid: "",
+        generated_at: "",
+        regime: "平静|mild|",
+        trigger: "",
+        model_generated: false,
+        will_inject: false,
+      },
+    },
+  });
+  assert.equal(elements["guidance-state"].textContent, "缓存中");
+  assert.match(
+    elements["guidance-tone"].textContent,
+    /此刻内心平静/,
+  );
+  // can_say / avoid 都空 → "（无）" 占位 + 风格 class
+  assert.match(elements["guidance-rows"].innerHTML, /guidance-row empty/);
+  const emptyCount = (elements["guidance-rows"].innerHTML.match(/guidance-row empty/g) || []).length;
+  assert.equal(emptyCount, 2, "can_say 和 avoid 都应为 empty 态");
+  assert.match(elements["guidance-note"].innerHTML, /内心平静/);
 });
 
 test("brand mark shows the synced plugin logo with a text fallback", () => {

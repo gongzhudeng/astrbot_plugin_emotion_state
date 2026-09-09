@@ -2494,12 +2494,25 @@ class EmotionStatePlugin(Star):
                         "tone": ledger.expression_guidance.tone
                         if ledger.expression_guidance
                         else "",
+                        "can_say": ledger.expression_guidance.can_say
+                        if ledger.expression_guidance
+                        else "",
+                        "avoid": ledger.expression_guidance.avoid
+                        if ledger.expression_guidance
+                        else "",
                         "generated_at": ledger.expression_guidance.generated_at
                         if ledger.expression_guidance
                         else "",
                         "regime": ledger.expression_guidance.regime
                         if ledger.expression_guidance
                         else "",
+                        "trigger": ledger.expression_guidance.trigger
+                        if ledger.expression_guidance
+                        else "",
+                        "model_generated": bool(
+                            ledger.expression_guidance
+                            and ledger.expression_guidance.model_generated
+                        ),
                         "will_inject": bool(
                             self._config("expression_guidance_enabled", True)
                             and ledger.expression_guidance is not None

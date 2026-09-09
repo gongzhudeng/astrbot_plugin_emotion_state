@@ -162,11 +162,12 @@ test("guidance panel sits under attention items in the right column", () => {
     guidanceIdx > fillcardIdx,
     "回复建议面板应位于待关注事项之后",
   );
-  // 右列当前是三行：身体反应 auto / 待关注 auto / 回复建议 1fr
+  // 右列当前是三行：身体反应 / 待关注 / 回复建议 全按内容自然高度，.grid 顶对齐避免右列被拉到心事同高
   assert.match(
     stylesSource,
-    /\.right-col\s*\{[^}]*grid-template-rows:\s*auto\s+auto\s+minmax\(0,\s*1fr\)/s,
+    /\.right-col\s*\{[^}]*grid-template-rows:\s*auto\s+auto\s+auto/s,
   );
+  assert.match(stylesSource, /\.grid\s*\{[^}]*align-items:\s*start/s);
   // 新的样式钩子都到位（玻璃盒、左竖线、注脚虚线分隔）
   assert.match(stylesSource, /\.guidance-card\b/);
   assert.match(stylesSource, /\.guidance\s+\.stage\b[^}]*border-left:/s);

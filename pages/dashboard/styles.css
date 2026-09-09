@@ -311,11 +311,11 @@ pre{margin:10px 0 0;padding:13px 15px;border-radius:14px;background:var(--glass-
 .d4 .dval{color:var(--dial-4)}
 
 /* ---------- 主网格：左 2/3 心事 + 右 1/3（身体 / 待关注 / 回复建议） ---------- */
-/* align-items:start 让右列按内容自适应，不再被强行拉到与心事同高 */
-.grid{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:20px;margin-top:20px;align-items:start}
+/* align-items:stretch 让右列与心事列表底边对齐；右列内部：身体 auto / 待关注弹性填充 / 回复建议 auto 贴底 */
+.grid{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:20px;margin-top:20px;align-items:stretch}
 .panel{display:flex;flex-direction:column;min-width:0}
 .panel.events{grid-column:1;min-height:0}
-.right-col{grid-column:2;display:grid;grid-template-rows:auto auto auto;gap:20px;min-height:0}
+.right-col{grid-column:2;display:grid;grid-template-rows:auto minmax(120px,1fr) auto;gap:20px;min-height:0}
 .diary{grid-column:1 / -1}
 
 .phead{display:flex;align-items:center;gap:10px;padding-bottom:14px;margin-bottom:2px;border-bottom:1px solid var(--hair)}
@@ -367,9 +367,9 @@ pre{margin:10px 0 0;padding:13px 15px;border-radius:14px;background:var(--glass-
 .intimacy-note{margin:10px 0 0;font-size:10.5px;color:var(--faint);line-height:1.6}
 .intimacy-note strong{color:var(--accent);font-weight:500}
 
-/* 待关注 */
+/* 待关注（弹性行：少则撑满右列空段，多则卡内滚动；max-height 封顶防极端数据把右列撑爆） */
 .fillcard{min-height:0;overflow:hidden}
-.att-list{display:flex;flex-direction:column;gap:6px;overflow:auto;min-height:0;padding-top:8px;
+.att-list{display:flex;flex-direction:column;gap:6px;overflow:auto;min-height:0;flex:1 1 auto;max-height:420px;padding-top:8px;
   scrollbar-width:thin;scrollbar-color:var(--hair) transparent}
 .att-list .event-item{border:1px solid var(--glass-line);background:var(--glass-2);
   border-radius:13px;margin:0;padding:10px 12px}

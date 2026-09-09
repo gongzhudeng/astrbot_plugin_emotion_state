@@ -162,12 +162,19 @@ test("guidance panel sits under attention items in the right column", () => {
     guidanceIdx > fillcardIdx,
     "回复建议面板应位于待关注事项之后",
   );
-  // 右列当前是三行：身体反应 / 待关注 / 回复建议 全按内容自然高度，.grid 顶对齐避免右列被拉到心事同高
+  // 右列三行：身体 auto / 待关注弹性行 minmax(120px,1fr) / 回复建议 auto 贴底；
+// .grid stretch 让右列与心事列表底边对齐
   assert.match(
     stylesSource,
-    /\.right-col\s*\{[^}]*grid-template-rows:\s*auto\s+auto\s+auto/s,
+    /\.right-col\s*\{[^}]*grid-template-rows:\s*auto\s+minmax\(120px,\s*1fr\)\s+auto/s,
   );
-  assert.match(stylesSource, /\.grid\s*\{[^}]*align-items:\s*start/s);
+  assert.match(stylesSource, /\.grid\s*\{[^}]*align-items:\s*stretch/s);
+  // 待关注列表在弹性行内自滚动，不外溢
+  const attRule = stylesSource.match(/\.att-list\s*\{([^}]*)\}/s);
+  assert.ok(attRule, ".att-list 规则应存在");
+  assert.match(attRule[1], /flex:\s*1\s+1\s+auto/);
+  assert.match(attRule[1], /overflow:\s*auto/);
+  assert.match(attRule[1], /min-height:\s*0/);
   // 新的样式钩子都到位（玻璃盒、左竖线、注脚虚线分隔）
   assert.match(stylesSource, /\.guidance-card\b/);
   assert.match(stylesSource, /\.guidance\s+\.stage\b[^}]*border-left:/s);
@@ -308,6 +315,31 @@ test("guidance panel falls back to a calm placeholder when no tone is cached", a
   const emptyCount = (elements["guidance-rows"].innerHTML.match(/guidance-row empty/g) || []).length;
   assert.equal(emptyCount, 2, "can_say 和 avoid 都应为 empty 态");
   assert.match(elements["guidance-note"].innerHTML, /内心平静/);
+});
+
+test("guidance panel flags a stale backend when the payload lacks can_say", async () => {
+  // 旧版后端（插件未重载）只返回 tone/generated_at/regime/will_inject
+  const { elements } = await exerciseGuidance({
+    ledger: ledger([]),
+    presentation: {
+      persona_intimacy_tier: "很亲密",
+      body_reaction_stage: "身体平静，没有明显性反应",
+      attention_items: [],
+    },
+    diagnostics: {
+      expression_guidance: {
+        tone: "语气明快活泼",
+        generated_at: "2026-09-09T11:50:17+00:00",
+        regime: "明快开心|mild|",
+        will_inject: true,
+      },
+    },
+  });
+  assert.equal(elements["guidance-state"].textContent, "后端待重载");
+  // 不再显示误导性的"（无）"占位
+  assert.equal(elements["guidance-rows"].innerHTML, "");
+  assert.match(elements["guidance-note"].innerHTML, /重载「内心世界」/);
+  assert.doesNotMatch(elements["guidance-rows"].innerHTML, /（无）/);
 });
 
 test("brand mark shows the synced plugin logo with a text fallback", () => {

@@ -137,8 +137,8 @@ def test_dashboard_uses_ready_bridge_and_separate_query_params() -> None:
     assert "guidance-card" in markup
     assert "renderGuidance" in dashboard
     assert r".guidance-card" in styles
-    assert "grid-template-rows:auto auto auto" in styles
-    assert "align-items:start" in styles
+    assert "grid-template-rows:auto minmax(120px,1fr) auto" in styles
+    assert "align-items:stretch" in styles
 
 
 def test_emotion_commands_keep_group_and_standalone_routes_separate() -> None:

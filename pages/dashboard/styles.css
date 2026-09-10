@@ -7,11 +7,14 @@
   --bg-a:#FDEEF3; --bg-b:#F8E9F4; --bg-c:#EFF0FA;
   --glow-1:#F2B4C8; --glow-2:#C4B0EC; --glow-3:#A8D8C0;
   --ink:#4A3644; --sub:#978092; --faint:#BCAAB8;
+  --label:#745E6B; --hint:#7D6673;
   --rose:#D67A96; --lavender:#A08CD8; --mint:#6FBF97; --gold:#C9A050; --blue:#91A9DD;
   --glass:rgba(255,255,255,.42);
   --glass-2:rgba(255,255,255,.26);
   --glass-line:rgba(255,255,255,.72);
+  --glass-strong:rgba(255,255,255,.84);
   --hair:rgba(74,54,68,.10);
+  --hair-strong:rgba(74,54,68,.26);
   --shadow:0 12px 40px rgba(120,80,110,.10);
   --shadow-lift:0 26px 70px rgba(120,80,110,.18);
 
@@ -45,11 +48,14 @@
   --bg-a:#1E1420; --bg-b:#241626; --bg-c:#141222;
   --glow-1:#A85474; --glow-2:#6A54A0; --glow-3:#4A7A62;
   --ink:#F2E4EC; --sub:#A892A2; --faint:#7E6B7A;
+  --label:var(--sub); --hint:var(--faint);
   --rose:#E89CB4; --lavender:#AC9EE8; --mint:#7CC9A2; --gold:#D8BC80; --blue:#9BA8DC;
   --glass:rgba(56,40,60,.42);
   --glass-2:rgba(56,40,60,.26);
   --glass-line:rgba(255,255,255,.14);
+  --glass-strong:rgba(56,40,60,.84);
   --hair:rgba(255,255,255,.08);
+  --hair-strong:var(--hair);
   --shadow:0 14px 44px rgba(0,0,0,.42);
   --shadow-lift:0 30px 80px rgba(0,0,0,.55);
   --accent:var(--rose);
@@ -522,12 +528,12 @@ pre{margin:10px 0 0;padding:13px 15px;border-radius:14px;background:var(--glass-
 .attention-form{width:min(480px,100%)}
 .attention-form .field{display:flex;flex:1;flex-direction:column;gap:6px;min-width:0}
 .attention-form .field-row{display:flex;gap:10px;margin-top:12px}
-.attention-form label{font-size:11.5px;color:var(--sub)}
+.attention-form label{font-size:11.5px;color:var(--label)}
 .attention-form textarea,.attention-form input,.attention-form select{width:100%;box-sizing:border-box;
-  padding:9px 11px;border:1px solid var(--hair);border-radius:10px;background:var(--glass);
+  padding:9px 11px;border:1px solid var(--hair-strong);border-radius:10px;background:var(--glass);
   color:var(--ink);font:inherit;font-size:13px;resize:vertical}
 .attention-form textarea:focus,.attention-form input:focus,.attention-form select:focus{outline:none;border-color:var(--accent)}
-.attention-form .field-hint{margin:10px 0 0;font-size:10.5px;line-height:1.6;color:var(--faint)}
+.attention-form .field-hint{margin:10px 0 0;font-size:10.5px;line-height:1.6;color:var(--hint)}
 .attention-form .form-error{margin:10px 0 0;color:var(--danger);font-size:12px}
 .primary-button{border-color:var(--accent);background:var(--glass);color:var(--accent);font-weight:500}
 .primary-button:hover{border-color:var(--accent)}

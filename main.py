@@ -27,6 +27,7 @@ from .core.attention import (
     is_open_attention,
     select_attention_items,
 )
+from .core.attention_rules import catch_user_attention
 from .core.daily import (
     build_daily_prompt,
     local_daily_fallback,
@@ -180,7 +181,7 @@ def _require_json_object(raw: str) -> dict[str, Any]:
     PLUGIN_NAME,
     "灵犀 · 内心世界",
     "私聊专用的连续情绪、心事、每日回顾与亲密状态系统。",
-    "v0.3.13",
+    "v0.3.14",
     "https://github.com/gongzhudeng/astrbot_plugin_emotion_state",
 )
 class EmotionStatePlugin(Star):
@@ -204,6 +205,9 @@ class EmotionStatePlugin(Star):
             ),
             attention_auto_archive_days=self._float_config(
                 "attention_auto_archive_days", 3.0
+            ),
+            attention_expiry_grace_days=self._float_config(
+                "attention_expiry_grace_days", 1.0
             ),
             negative_bias=self._float_config("sensitivity_negative_bias", 2.5),
         )
@@ -486,6 +490,11 @@ class EmotionStatePlugin(Star):
                 ),
                 {"signals": len(signals[:3])},
             )
+
+        # Zero-cost catch: an explicit "remember this" must never wait for a
+        # model summary round that may or may not notice it.
+        if self._config("attention_local_catch_enabled", True):
+            await self._catch_local_attention(key, text)
 
         has_jealousy_evidence, jealousy_source, jealousy_strength = jealousy_evidence(
             text
@@ -883,7 +892,7 @@ class EmotionStatePlugin(Star):
                 if (
                     not content
                     or not evidence_quote
-                    or confidence < (0.62 if status == "proposed" else 0.82)
+                    or confidence < (0.62 if status == "proposed" else 0.70)
                     or (
                         status != "proposed"
                         and (not explicit or evidence_speaker != "user")
@@ -1143,11 +1152,11 @@ class EmotionStatePlugin(Star):
             expected_version = updated.state_version
 
     async def _apply_review_attention_items(self, user_key: str, payload: Any) -> None:
-        """Apply attention completions/cancellations judged from the chat tail."""
+        """Apply attention settlements (and backfills) judged from the chat tail."""
         observations = self._parse_attention_observations(
             payload, source="attention_review"
         )
-        for observation in observations[:4]:
+        for observation in observations[:8]:
             _, applied, reason = await self.service.observe_attention(
                 user_key, observation
             )
@@ -1157,6 +1166,30 @@ class EmotionStatePlugin(Star):
                     observation.action,
                     reason,
                 )
+
+    async def _catch_local_attention(self, user_key: str, text: str) -> None:
+        """Land explicit "remember this" requests without waiting for a model."""
+        try:
+            ledger = await self.service.get(user_key, settle=False)
+            observation = catch_user_attention(
+                text, existing_items=ledger.attention_items
+            )
+            if observation is None:
+                return
+            _, applied, reason = await self.service.observe_attention(
+                user_key, observation
+            )
+            if applied:
+                logger.info(
+                    "[EmotionState] local attention catch: %s",
+                    observation.content[:60],
+                )
+            else:
+                logger.debug(
+                    "[EmotionState] local attention catch skipped: %s", reason
+                )
+        except Exception as exc:  # the safety net must never break chatting
+            logger.debug("[EmotionState] local attention catch failed: %s", exc)
 
     async def _recent_chat_messages(self, user_key: str, limit: int = 24) -> str:
         """Read the recent private chat tail via the LivingMemory handshake.
@@ -1256,14 +1289,17 @@ class EmotionStatePlugin(Star):
             for item in ledger.attention_items
             if is_open_attention(item)
         ][:8]
-        attention_section = ""
+        attention_section = "\n## 待关注事项核对（第二任务）\n"
         if attention_view:
-            attention_section = (
-                "\n## 待关注事项核对（第二任务）\n"
+            attention_section += (
                 "以下是角色记着的约定/待办。逐条对照最近聊天记录判断：\n"
                 "- 按约定的【本意】判断是否已经做到，不要逐字核对字面。夸张说法"
                 '（如"榨干"、"一滴不剩"、"疼死"）指的是它代表的活动本身；'
                 "聊天里能看出该活动已经发生，就算完成。\n"
+                "- **不必等到截止时间**：只要在聊天里能看出这件事已经提前做到"
+                "（例如提前买了奶茶、提前发了照片、提前把事办了），就现在输出 "
+                'action="complete"；用户明确说"不用了""取消了""改天吧""算了"'
+                '就输出 action="cancel"。不要因为还没到 due_at 就留着等它过期。\n'
                 "- 角色自己单方面完成也算数：比如约好发照片，聊天里角色已发出照片并说明"
                 '（如"这是你要的cos照"），即视为完成，不需要用户确认。\n'
                 '- 判断为玩笑、琐碎闲聊或已经无关紧要的事项，输出 action="cancel" 清掉。\n'
@@ -1274,6 +1310,24 @@ class EmotionStatePlugin(Star):
                 "confidence ≥ 0.78。证据不足就跳过该事项，不要编造。\n"
                 f"待办清单：{json.dumps(attention_view, ensure_ascii=False)}\n"
             )
+        else:
+            attention_section += "当前没有任何待关注事项。\n"
+        attention_section += (
+            "\n## 待关注事项补建（第三任务）\n"
+            "对照最近聊天记录，检查有没有**用户提出、但还没进入上面清单**的事项：\n"
+            '- 明确要求提醒或记住（如"明天早上记得提醒我带身份证"、"别忘了"、"帮我记着"）\n'
+            '- 双方约定或承诺（如"明天给你点奶茶"、"晚上拍给你看"、"我答应你……"）\n'
+            '- 用户自己正在进行或打算做的事（如"我再弄一个插件"、"我要做个语音模型"）\n'
+            "- 用户要求后续继续跟进的话题\n"
+            '有就输出 action="create"，字段：content（写明是谁的什么事）、'
+            "kind（commitment/plan/remember/follow_up）、time_hint、due_at"
+            "（能确定就填 ISO 时间，不确定一律留空，表示长期挂起）、"
+            "confidence（≥0.70）、explicit=true、evidence_quote（逐字引用用户原话）、"
+            'evidence_speaker="user"。\n'
+            "- 不要重复清单里已有的事项；不要为纯闲聊、纯情绪抒发、"
+            "或已经完全结束的过去事实建项。\n"
+            "- 拿不准时倾向于建项，后续复核还会再判断它是否完成。最多补建 3 项。\n"
+        )
         prompt = (
             "请只返回 JSON 对象，判断以下最近私聊记录，完成两个任务。\n"
             "## 任务一：心事与情绪影响\n"

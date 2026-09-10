@@ -18,8 +18,14 @@ from .models import (
 )
 
 _TERMINAL_STATUSES = {"completed", "cancelled", "superseded", "archived"}
-# Sources trusted to mutate attention items from model output.
-_ATTENTION_REVIEW_SOURCES = {"livingmemory_summary", "attention_review"}
+# Sources trusted to mutate attention items. ``local_catch`` is the zero-cost
+# catch for explicit reminder wording and never depends on a model call.
+# (``local_rule`` stays untrusted: it is the legacy keyword engine.)
+_ATTENTION_REVIEW_SOURCES = {
+    "livingmemory_summary",
+    "attention_review",
+    "local_catch",
+}
 _ATTENTION_ACTIONS = {
     "create",
     "confirm",
@@ -187,14 +193,23 @@ def resolve_due_at(time_hint: str, now: datetime | None = None) -> str:
 def archive_expired_attention_items(
     ledger: StateLedger,
     now: datetime | None = None,
+    *,
+    grace_days: float = 1.0,
 ) -> tuple[StateLedger, list[str]]:
-    """Archive one-off items after an explicit deadline without claiming success."""
+    """Archive one-off items after an explicit deadline without claiming success.
+
+    ``grace_days`` keeps an overdue item alive for a short window so the model
+    reviewer can still read the chat and settle it as completed instead of the
+    janitor silently archiving it.
+    """
     current_time = now or utc_now()
+    grace = max(0.0, float(grace_days))
+    cutoff = current_time - timedelta(days=grace)
     updated = _copy_ledger(ledger)
     timestamp = current_time.isoformat()
     archived_ids: list[str] = []
     for item in updated.attention_items:
-        if not is_attention_overdue(item, current_time):
+        if not is_attention_overdue(item, cutoff):
             continue
         item.status = "archived"
         item.archived_at = timestamp
@@ -225,7 +240,9 @@ def archive_stale_attention_items(
 ) -> tuple[StateLedger, list[str]]:
     """Archive one-off open items with no new evidence for ``max_days``.
 
-    Long-term items (以后/每次/每天/长期) are exempt. This is a janitor, not a
+    Long-term items are exempt: anything without an explicit ``due_at`` (an open
+    project, "我在弄一个插件", "以后每次…") stays until a reviewer settles it.
+    Cues like 以后/每次/每天/长期 also exempt. This is a janitor, not a
     completion claim: the archive note explicitly says it is not success.
     """
     bounded = float(max_days)
@@ -237,6 +254,10 @@ def archive_stale_attention_items(
     archived_ids: list[str] = []
     for item in updated.attention_items:
         if not is_open_attention(item) or is_attention_overdue(item, current_time):
+            continue
+        # No explicit deadline means the user never said when it ends: keep it
+        # until the model sees evidence that it is done or cancelled.
+        if not item.due_at:
             continue
         if _ONGOING_ATTENTION_CUES.search(f"{item.time_hint} {item.content}"):
             continue
@@ -401,7 +422,7 @@ def attention_observation_rejection(
                 return "missing_user_evidence"
             if not observation.explicit:
                 return "non_explicit_attention"
-            if observation.confidence < 0.82:
+            if observation.confidence < 0.70:
                 return "insufficient_attention_confidence"
         if re.search(
             r"(?:等一下|一会儿|待会儿|马上|现在|正在).{0,28}"
@@ -590,6 +611,9 @@ def enforce_attention_capacity(
         except (TypeError, ValueError, OverflowError):
             evidence_at = 0.0
         return (
+            # Open-ended items (no explicit deadline) are kept first: they are
+            # the long-running things the user actually wants remembered.
+            1 if not item.due_at else 0,
             1 if item.status == "open" else 0,
             1 if item.explicit else 0,
             item.confidence,

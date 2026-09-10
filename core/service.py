@@ -54,6 +54,7 @@ class EmotionStateService:
         intrinsic_factory: Callable[[], IntrinsicParams | None] | None = None,
         offset_half_life_minutes: float = 15.0,
         attention_auto_archive_days: float = 3.0,
+        attention_expiry_grace_days: float = 1.0,
         negative_bias: float = 2.5,
     ) -> None:
         self.store = store
@@ -67,6 +68,8 @@ class EmotionStateService:
         self.offset_half_life_minutes = max(1.0, float(offset_half_life_minutes))
         # 0 disables the stale-attention janitor entirely.
         self.attention_auto_archive_days = max(0.0, float(attention_auto_archive_days))
+        # Overdue items stay for this long so the reviewer can settle them first.
+        self.attention_expiry_grace_days = max(0.0, float(attention_expiry_grace_days))
         # Negativity bias for user-directed hurtful events (clamped in settlement).
         self.negative_bias = float(negative_bias)
         self._locks: dict[str, asyncio.Lock] = {}
@@ -88,7 +91,9 @@ class EmotionStateService:
     ) -> tuple[StateLedger, list[str], list[str]]:
         updated = ledger
         reasons: list[str] = []
-        updated, expired_attention_ids = archive_expired_attention_items(updated, now)
+        updated, expired_attention_ids = archive_expired_attention_items(
+            updated, now, grace_days=self.attention_expiry_grace_days
+        )
         reasons.extend("attention_expired_archive" for _ in expired_attention_ids)
         if self.attention_auto_archive_days > 0:
             updated, stale_ids = archive_stale_attention_items(

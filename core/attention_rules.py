@@ -6,7 +6,11 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-from .attention import is_open_attention, normalize_attention_content
+from .attention import (
+    attention_fingerprint,
+    is_open_attention,
+    normalize_attention_content,
+)
 from .models import AttentionItem, AttentionObservation
 from .settlement import strip_media_context
 
@@ -31,6 +35,15 @@ _COMPLETE_CUES = re.compile(
 _CANCEL_CUES = re.compile(
     r"取消(?:吧|了)?|算了吧?|不(?:用|要|做|玩|拍|发).{0,10}了|作废"
 )
+# Strong "please remember this" wording. When a user says one of these the item
+# must land in the ledger immediately, without waiting for a model summary.
+_STRONG_CATCH_CUES = re.compile(
+    r"提醒我|提醒一下|记得(?:要)?|别忘了|别忘记|不要忘|帮我记着|帮我记住|"
+    r"记一下|给我记住|一定要记住|务必记住|你要记住"
+)
+# Chatter is split away so a reminder tacked onto a long message does not drag
+# the whole message into the ledger.
+_CLAUSE_SPLIT = re.compile(r"[。！？!？；;，,、\n]+")
 
 
 @dataclass(slots=True)
@@ -53,6 +66,92 @@ def _due_at(text: str, now: datetime | None = None) -> str:
         hour=23, minute=59, second=59, microsecond=0
     )
     return target.isoformat()
+
+
+def _overlap_ratio(left: str, right: str) -> float:
+    """Cheap char-set overlap used to spot an already-recorded item."""
+    a = set(re.findall(r"[\w\u4e00-\u9fff]", left or ""))
+    b = set(re.findall(r"[\w\u4e00-\u9fff]", right or ""))
+    if not a or not b:
+        return 0.0
+    return len(a & b) / min(len(a), len(b))
+
+
+def focus_clause(text: str) -> str:
+    """Keep only the clause carrying the reminder, dropping surrounding chatter.
+
+    "今天聊得挺开心，对了明天别忘了带身份证" stores just the second clause,
+    so the item stays readable instead of quoting a whole message.
+    """
+    parts = [part.strip() for part in _CLAUSE_SPLIT.split(text or "") if part.strip()]
+    if len(parts) <= 1:
+        return (text or "").strip()
+    hits = [part for part in parts if _STRONG_CATCH_CUES.search(part)]
+    if not hits:
+        return (text or "").strip()
+    # Longest hit carries the most detail ("明天早上记得提醒我带身份证去办事"
+    # beats a trailing "别忘了啊").
+    picked = max(hits, key=len)
+    if len(picked) < 4:
+        picked = " ".join(hits)
+    return picked or (text or "").strip()
+
+
+def catch_user_attention(
+    text: str,
+    *,
+    existing_items: list[AttentionItem] | None = None,
+    now: datetime | None = None,
+) -> AttentionObservation | None:
+    """Zero-cost safety net for explicit reminder requests.
+
+    The model summary is the primary writer, but it can silently skip an item.
+    Anything the user explicitly asked to be remembered lands here instead of
+    waiting for the next summary round.
+    """
+    clean = normalize_attention_content(strip_media_context(text))
+    if not clean or not (6 <= len(clean) <= 200):
+        return None
+    if clean.lstrip().startswith(("/", "！", "!")) or "```" in clean:
+        return None
+    if _ACK_ONLY.search(clean):
+        return None
+    if not _STRONG_CATCH_CUES.search(clean):
+        return None
+    # A question is a lookup ("你记得那个计划吗"), not a new commitment.
+    # Must test the raw text: normalization strips the trailing mark.
+    if re.search(r"[？?]\s*$", str(text or "").strip()):
+        return None
+
+    # Store the reminder clause only; time hints still read from the full text
+    # so a leading "明天" is not lost when it sits in its own clause.
+    content = focus_clause(clean)[:120] or clean[:120]
+    if len(content) < 4:
+        content = clean[:120]
+    fingerprint = attention_fingerprint(content)
+    for item in existing_items or []:
+        if not is_open_attention(item):
+            continue
+        if item.fingerprint == fingerprint:
+            return None
+        if _overlap_ratio(content, item.content) >= 0.62:
+            return None
+
+    return AttentionObservation(
+        action="create",
+        content=content,
+        kind="remember",
+        status="open",
+        actor="user",
+        time_hint=_time_hint(clean),
+        due_at=_due_at(clean, now),
+        confidence=0.9,
+        explicit=True,
+        source="local_catch",
+        evidence_quote=clean,
+        evidence_speaker="user",
+        note="本地强指令兜底",
+    )
 
 
 def _best_existing(text: str, items: list[AttentionItem]) -> AttentionItem | None:

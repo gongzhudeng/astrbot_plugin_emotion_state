@@ -1583,13 +1583,21 @@ async def test_expired_attention_is_archived_on_service_settlement(tmp_path) -> 
             AttentionItem(
                 id="expired",
                 content="今天发一张照片",
-                due_at=(now - timedelta(minutes=1)).isoformat(),
+                due_at=(now - timedelta(days=2)).isoformat(),
                 confidence=0.9,
             ),
             AttentionItem(
                 id="ongoing",
                 content="以后晚上多发语音",
                 due_at=(now - timedelta(days=1)).isoformat(),
+                confidence=0.9,
+            ),
+            # Inside the grace window the reviewer still gets a chance to read
+            # the chat and settle it as completed instead of silent archiving.
+            AttentionItem(
+                id="grace",
+                content="昨天说好今天发照片",
+                due_at=(now - timedelta(hours=6)).isoformat(),
                 confidence=0.9,
             ),
         ],
@@ -1606,6 +1614,10 @@ async def test_expired_attention_is_archived_on_service_settlement(tmp_path) -> 
     assert expired.evidence[-1].kind == "archive_attention_expired"
     assert (
         next(item for item in settled.attention_items if item.id == "ongoing").status
+        == "open"
+    )
+    assert (
+        next(item for item in settled.attention_items if item.id == "grace").status
         == "open"
     )
     audit = store.audit_file.read_text(encoding="utf-8")
@@ -1881,3 +1893,20 @@ def test_overlong_fact_is_bounded_at_readable_punctuation() -> None:
     injected_line = next(line for line in prompt.splitlines() if line.startswith("- "))
     assert "我当" not in injected_line
     assert "。…（对象：" in injected_line
+
+
+def test_local_catch_stores_only_the_reminder_clause() -> None:
+    from astrbot_plugin_emotion_state.core.attention_rules import catch_user_attention
+
+    observation = catch_user_attention(
+        "刚才那个视频笑死我了哈哈哈哈，对了，明天早上记得提醒我带身份证去办事，别忘了啊"
+    )
+    assert observation is not None
+    assert "笑死我" not in observation.content
+    assert "身份证" in observation.content
+    # A deadline sitting in its own clause must still be picked up.
+    assert observation.due_at
+
+    assert catch_user_attention("你记得我上次说的那个计划吗？") is None
+    assert catch_user_attention("好的我记住了") is None
+    assert catch_user_attention("今天天气不错") is None

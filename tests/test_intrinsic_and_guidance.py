@@ -854,7 +854,13 @@ def test_stale_attention_items_get_archived() -> None:
     now = datetime.now(timezone.utc)
     ledger = StateLedger(user_key="private:stale")
 
-    stale = AttentionItem(content="一件旧约定", status="open", confidence=0.9)
+    # Deadline in the future, but nothing has been said about it for days.
+    stale = AttentionItem(
+        content="一件旧约定",
+        status="open",
+        confidence=0.9,
+        due_at=(now + timedelta(days=10)).isoformat(),
+    )
     stale.created_at = (now - timedelta(days=6)).isoformat()
     stale.last_evidence_at = stale.created_at
 
@@ -867,13 +873,20 @@ def test_stale_attention_items_get_archived() -> None:
     ongoing.created_at = (now - timedelta(days=30)).isoformat()
     ongoing.last_evidence_at = ongoing.created_at
 
+    # No due_at means the user never said when it ends: an open project stays
+    # until a reviewer sees evidence that it is done or cancelled.
+    project = AttentionItem(content="他在弄一个新插件", status="open", confidence=0.9)
+    project.created_at = (now - timedelta(days=30)).isoformat()
+    project.last_evidence_at = project.created_at
+
     fresh = AttentionItem(content="刚约定的事", status="open", confidence=0.9)
-    ledger.attention_items.extend([stale, ongoing, fresh])
+    ledger.attention_items.extend([stale, ongoing, project, fresh])
 
     updated, archived = archive_stale_attention_items(ledger, max_days=3.0, now=now)
     by_id = {item.id: item for item in updated.attention_items}
     assert by_id[stale.id].status == "archived"
     assert by_id[ongoing.id].status == "open"
+    assert by_id[project.id].status == "open"
     assert by_id[fresh.id].status == "open"
     assert archived == [stale.id]
 

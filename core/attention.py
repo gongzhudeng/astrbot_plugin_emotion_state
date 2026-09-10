@@ -20,11 +20,13 @@ from .models import (
 _TERMINAL_STATUSES = {"completed", "cancelled", "superseded", "archived"}
 # Sources trusted to mutate attention items. ``local_catch`` is the zero-cost
 # catch for explicit reminder wording and never depends on a model call.
+# ``webui`` is a human editing the dashboard by hand: highest trust.
 # (``local_rule`` stays untrusted: it is the legacy keyword engine.)
 _ATTENTION_REVIEW_SOURCES = {
     "livingmemory_summary",
     "attention_review",
     "local_catch",
+    "webui",
 }
 _ATTENTION_ACTIONS = {
     "create",
@@ -424,33 +426,37 @@ def attention_observation_rejection(
                 return "non_explicit_attention"
             if observation.confidence < 0.70:
                 return "insufficient_attention_confidence"
-        if re.search(
-            r"(?:等一下|一会儿|待会儿|马上|现在|正在).{0,28}"
-            r"(?:发|拍|聊|说|做|去|给|看|回复)",
-            evidence,
-        ):
-            return "short_lived_attention"
-        if re.search(
-            r"(?:有个|这个|那个).{0,12}(?:计划|约定|事项).{0,20}"
-            r"(?:能看见|看得到|还在吗)|"
-            r"(?:插件|模型|你).{0,16}(?:记错|说错|弄错|发癫)|"
-            r"(?:不是|并非).{0,8}(?:计划|约定)|"
-            r"(?:你|你说的|这个).{0,12}周[一二三四五六日天].{0,12}"
-            r"(?:不对|不准|错了|不是)",
-            evidence,
-        ):
-            return "quoted_or_corrected_attention"
-        if _COMPLETED_OR_PAST_CUES.search(evidence) or re.search(
-            r"(?:昨天|前天|上周|上个月|去年|已经过去|已经过期|过期的)",
-            evidence,
-        ):
-            return "past_attention"
-        if observation.due_at:
-            try:
-                if parse_time(observation.due_at) < utc_now():
-                    return "past_attention"
-            except (TypeError, ValueError):
-                return "invalid_attention_due_at"
+        if observation.source != "webui":
+            # The heuristics below guard against model hallucinations. A human
+            # typing in the dashboard is the authority, so they are skipped:
+            # back-filling an item whose deadline already passed is legitimate.
+            if re.search(
+                r"(?:等一下|一会儿|待会儿|马上|现在|正在).{0,28}"
+                r"(?:发|拍|聊|说|做|去|给|看|回复)",
+                evidence,
+            ):
+                return "short_lived_attention"
+            if re.search(
+                r"(?:有个|这个|那个).{0,12}(?:计划|约定|事项).{0,20}"
+                r"(?:能看见|看得到|还在吗)|"
+                r"(?:插件|模型|你).{0,16}(?:记错|说错|弄错|发癫)|"
+                r"(?:不是|并非).{0,8}(?:计划|约定)|"
+                r"(?:你|你说的|这个).{0,12}周[一二三四五六日天].{0,12}"
+                r"(?:不对|不准|错了|不是)",
+                evidence,
+            ):
+                return "quoted_or_corrected_attention"
+            if _COMPLETED_OR_PAST_CUES.search(evidence) or re.search(
+                r"(?:昨天|前天|上周|上个月|去年|已经过去|已经过期|过期的)",
+                evidence,
+            ):
+                return "past_attention"
+            if observation.due_at:
+                try:
+                    if parse_time(observation.due_at) < utc_now():
+                        return "past_attention"
+                except (TypeError, ValueError):
+                    return "invalid_attention_due_at"
     else:
         allowed_speakers = (
             {"user", "assistant", "both"}

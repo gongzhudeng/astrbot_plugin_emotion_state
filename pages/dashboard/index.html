@@ -116,20 +116,43 @@
         <div class="glass panel fillcard">
           <div class="phead">
             <h3>待关注事项</h3>
-            <span class="count" id="attention-count"></span>
+            <span class="phead-actions">
+              <button id="attention-add" type="button" class="mini" title="手动添加一条待关注事项">＋ 新增</button>
+              <span class="count" id="attention-count"></span>
+            </span>
           </div>
           <div id="attention-items" class="att-list"></div>
         </div>
 
         <div class="glass panel guidance-card">
           <div class="phead">
-            <h3>回复建议</h3>
-            <span class="count" id="guidance-state">未生成</span>
+            <h3>实际注入</h3>
+            <span class="count" id="injection-count">–</span>
           </div>
-          <div class="guidance" id="guidance-block">
-            <p class="stage" id="guidance-tone">…</p>
-            <div id="guidance-rows" class="guidance-rows"></div>
-            <p class="guidance-note" id="guidance-note"></p>
+          <div class="injection-view" id="guidance-block">
+            <div class="inj-mood">
+              <strong id="inj-mood-label">…</strong>
+              <span class="inj-chips">
+                <i id="inj-valence">偏向 –</i>
+                <i id="inj-energy">能量 –</i>
+                <i id="inj-tension">紧张 –</i>
+              </span>
+            </div>
+            <div class="inj-row"><span class="lb">身体反应</span><span class="val" id="inj-body-stage">…</span></div>
+            <div class="inj-sec">
+              <h4>此刻注入的心事<span class="inj-count" id="inj-event-count"></span></h4>
+              <div id="inj-events" class="inj-list"></div>
+            </div>
+            <div class="inj-sec">
+              <h4>此刻注入的待关注<span class="inj-count" id="inj-attention-count"></span></h4>
+              <div id="inj-attention" class="inj-list"></div>
+            </div>
+            <div class="inj-sec">
+              <h4>表达建议<span class="inj-count" id="guidance-state">未生成</span></h4>
+              <p class="stage" id="guidance-tone">…</p>
+              <div id="guidance-rows" class="guidance-rows"></div>
+              <p class="guidance-note" id="guidance-note"></p>
+            </div>
           </div>
         </div>
       </div>
@@ -198,6 +221,52 @@
       <div class="confirm-actions">
         <button id="delete-cancel" type="button">取消</button>
         <button id="delete-apply" class="danger-button" type="button">删除</button>
+      </div>
+    </section>
+  </div>
+
+  <div id="attention-dialog" class="confirm-overlay" hidden>
+    <section class="confirm-dialog attention-form" role="dialog" aria-modal="true" aria-labelledby="attention-dialog-title">
+      <h2 id="attention-dialog-title">新增待关注事项</h2>
+      <div class="field">
+        <label for="att-content">内容</label>
+        <textarea id="att-content" rows="3" maxlength="240" placeholder="例如：明天早上提醒他带身份证"></textarea>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="att-kind">类型</label>
+          <select id="att-kind">
+            <option value="remember">记住</option>
+            <option value="commitment">约定</option>
+            <option value="plan">计划</option>
+            <option value="follow_up">跟进</option>
+          </select>
+        </div>
+        <div class="field" id="att-status-field" hidden>
+          <label for="att-status">状态</label>
+          <select id="att-status">
+            <option value="open">未完结</option>
+            <option value="proposed">提议中</option>
+            <option value="completed">已完成</option>
+            <option value="cancelled">已取消</option>
+          </select>
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="att-time-hint">时间提示（可选）</label>
+          <input id="att-time-hint" type="text" maxlength="40" placeholder="例如：明天早上">
+        </div>
+        <div class="field">
+          <label for="att-due-at">截止时间（可选）</label>
+          <input id="att-due-at" type="datetime-local">
+        </div>
+      </div>
+      <p class="field-hint">截止时间留空 = 长期事项，不会被自动清理；等聊天里确认完成后再标已完成。</p>
+      <p id="attention-form-error" class="form-error" role="alert" hidden></p>
+      <div class="confirm-actions">
+        <button id="attention-cancel" type="button">取消</button>
+        <button id="attention-apply" class="primary-button" type="button">保存</button>
       </div>
     </section>
   </div>

@@ -262,6 +262,88 @@ function eventCategoryLabel(category) {
   })[category] || "心事";
 }
 
+/* ===== 待关注事项 · 手动新增 / 编辑 ===== */
+const attentionForm = { mode: "create", itemId: "", itemVersion: null };
+
+function toDatetimeLocal(value) {
+  if (!value) return "";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "";
+  const pad = (part) => String(part).padStart(2, "0");
+  return `${parsed.getFullYear()}-${pad(parsed.getMonth() + 1)}-${pad(parsed.getDate())}`
+    + `T${pad(parsed.getHours())}:${pad(parsed.getMinutes())}`;
+}
+
+function setFormError(message) {
+  const error = $("attention-form-error");
+  error.hidden = !message;
+  error.textContent = message;
+}
+
+function openAttentionDialog(mode, itemId = "") {
+  const rawItems = Array.isArray(state.data?.presentation?.all_open_attention_items)
+    ? state.data.presentation.all_open_attention_items
+    : [];
+  const item = itemId
+    ? rawItems.find((entry) => text(entry.id) === text(itemId))
+    : null;
+  if (itemId && !item) {
+    showActionStatus("找不到这条事项的原始数据，请刷新后重试", "error");
+    return;
+  }
+  attentionForm.mode = mode;
+  attentionForm.itemId = item ? text(item.id) : "";
+  attentionForm.itemVersion = item ? Number(item.version) : null;
+  $("attention-dialog-title").textContent = mode === "create"
+    ? "新增待关注事项"
+    : "编辑待关注事项";
+  $("att-content").value = item ? text(item.content) : "";
+  $("att-kind").value = item ? text(item.kind) || "follow_up" : "remember";
+  $("att-status").value = item ? text(item.status) || "open" : "open";
+  $("att-status-field").hidden = mode !== "update";
+  $("att-time-hint").value = item ? text(item.time_hint) : "";
+  $("att-due-at").value = item ? toDatetimeLocal(item.due_at) : "";
+  setFormError("");
+  $("attention-dialog").hidden = false;
+  $("att-content").focus();
+}
+
+function closeAttentionDialog() {
+  $("attention-dialog").hidden = true;
+}
+
+async function submitAttentionForm() {
+  const content = $("att-content").value.trim();
+  if (!content) {
+    setFormError("内容不能为空");
+    return;
+  }
+  const body = {
+    session_id: state.sessionId,
+    mode: attentionForm.mode,
+    content,
+    kind: $("att-kind").value,
+    time_hint: $("att-time-hint").value.trim(),
+    due_at: $("att-due-at").value,
+  };
+  if (attentionForm.mode === "update") {
+    body.item_id = attentionForm.itemId;
+    body.item_version = attentionForm.itemVersion;
+    body.status = $("att-status").value;
+  }
+  $("attention-apply").disabled = true;
+  try {
+    await api("page/attention/save", { method: "POST", body });
+    closeAttentionDialog();
+    showActionStatus(attentionForm.mode === "create" ? "待关注事项已添加" : "待关注事项已更新");
+    await loadState();
+  } catch (error) {
+    setFormError(error.message);
+  } finally {
+    $("attention-apply").disabled = false;
+  }
+}
+
 /* ===== 心境三档联动（暖/绷/沉）· 环仪表 · 轨道光点 · 昼夜 ===== */
 const BAND_LINES = {
   warm:  "此刻她心里是软的，还留着一点没说完的话",
@@ -367,6 +449,69 @@ function bodyReactionStage(intimacy) {
   return "not_noticeable";
 }
 
+const INJECTION_KIND_LABELS = {
+  commitment: "约定",
+  plan: "计划",
+  remember: "记住",
+  follow_up: "跟进",
+};
+
+function injectionKindLabel(kind) {
+  return INJECTION_KIND_LABELS[text(kind)] || text(kind) || "跟进";
+}
+
+function renderInjectionView(payload) {
+  const ledger = payload.ledger || {};
+  const presentation = payload.presentation || {};
+  const diagnostics = payload.diagnostics || {};
+
+  const mood = ledger.mood || {};
+  $("inj-mood-label").textContent = text(mood.label) || "…";
+  const chip = (label, value) => `${label} ${
+    Number.isFinite(Number(value)) ? Number(value).toFixed(2) : "–"
+  }`;
+  $("inj-valence").textContent = chip("偏向", mood.valence);
+  $("inj-energy").textContent = chip("能量", mood.energy);
+  $("inj-tension").textContent = chip("紧张", mood.tension);
+
+  $("inj-body-stage").textContent = text(presentation.body_reaction_stage) || "…";
+
+  const injectedEvents = Array.isArray(presentation.selected_injection_events)
+    ? presentation.selected_injection_events
+    : [];
+  $("inj-event-count").textContent = injectedEvents.length
+    ? ` ${injectedEvents.length} 条`
+    : "";
+  $("inj-events").innerHTML = injectedEvents.length ? injectedEvents.map((item) => `
+    <article class="inj-item">
+      <p class="fact">${html(item.fact)}</p>
+      ${text(item.emotional_meaning) ? `<p class="mean">${html(item.emotional_meaning)}</p>` : ""}
+      <span class="inj-meta"><b class="etag ${html(categoryClass(item.category))}">${html(eventCategoryLabel(item.category))}</b><em>${html(text(item.created_at).slice(0, 16).replace("T", " "))}</em></span>
+    </article>
+  `).join("") : `<p class="status-line">此刻没有心事被注入提示词</p>`;
+
+  const injectedAttention = Array.isArray(presentation.selected_injection_attention_items)
+    ? presentation.selected_injection_attention_items
+    : [];
+  $("inj-attention-count").textContent = injectedAttention.length
+    ? ` ${injectedAttention.length} 条`
+    : "";
+  $("inj-attention").innerHTML = injectedAttention.length ? injectedAttention.map((item) => `
+    <article class="inj-item">
+      <p class="fact">${html(item.content)}</p>
+      <span class="inj-meta"><b class="etag attention">${html(injectionKindLabel(item.kind))}</b><em>${html([
+        item.time_hint,
+        item.due_at ? `截止 ${formatBeijingTime(item.due_at).slice(0, 16)}` : "",
+      ].filter(Boolean).join(" · ") || "长期挂起")}</em></span>
+    </article>
+  `).join("") : `<p class="status-line">此刻没有待关注事项被注入提示词</p>`;
+
+  $("injection-count").textContent =
+    `心事 ${injectedEvents.length} · 待关注 ${injectedAttention.length}`;
+
+  renderGuidance(diagnostics);
+}
+
 function renderGuidance(diagnostics) {
   const data = diagnostics?.expression_guidance || {};
   // 旧版后端的 payload 没有 can_say 键——区分"真的没内容"和"插件后端未重载"
@@ -442,7 +587,7 @@ function renderState(payload) {
         item.time_hint || item.due_at,
         item.overdue ? "已到时间但尚无完成证据" : "",
       ].filter(Boolean).join(" · ") || "持续到明确完成、取消或替代")}</p></div>
-      <span class="event-state"><b class="etag attention">${html(item.kind_label || item.kind)}</b><em>${html(item.status_label || item.status)}</em><button class="delete-item" type="button" data-delete-kind="attention" data-delete-id="${html(item.item_id)}" aria-label="删除这条待关注事项" title="删除这条待关注事项">删除</button></span>
+      <span class="event-state"><b class="etag attention">${html(item.kind_label || item.kind)}</b><em>${html(item.status_label || item.status)}</em><button class="delete-item" type="button" data-edit-id="${html(item.item_id)}" aria-label="编辑这条待关注事项" title="编辑这条待关注事项">编辑</button><button class="delete-item" type="button" data-delete-kind="attention" data-delete-id="${html(item.item_id)}" aria-label="删除这条待关注事项" title="删除这条待关注事项">删除</button></span>
     </article>
   `).join("") : `<p class="status-line">暂无待关注事项</p>`;
 
@@ -466,7 +611,7 @@ function renderState(payload) {
   renderDiaries();
 
   const diagnostics = payload.diagnostics || {};
-  renderGuidance(diagnostics);
+  renderInjectionView(payload);
   $("diagnostics").innerHTML = [
     ["Busy Schedule", diagnostics.busy_schedule ? "已连接" : "未连接"],
     ["LivingMemory", diagnostics.livingmemory ? "已连接" : "未连接"],
@@ -664,6 +809,11 @@ $("events").addEventListener("click", (event) => {
   );
 });
 $("attention-items").addEventListener("click", (event) => {
+  const editTarget = event.target.closest("[data-edit-id]");
+  if (editTarget) {
+    openAttentionDialog("update", editTarget.dataset.editId);
+    return;
+  }
   const target = event.target.closest("[data-delete-kind]");
   if (!target) return;
   requestArchiveItem(
@@ -672,6 +822,12 @@ $("attention-items").addEventListener("click", (event) => {
     "待关注事项",
     target.closest(".event-item"),
   );
+});
+$("attention-add").addEventListener("click", () => openAttentionDialog("create"));
+$("attention-cancel").addEventListener("click", closeAttentionDialog);
+$("attention-apply").addEventListener("click", submitAttentionForm);
+$("attention-dialog").addEventListener("click", (event) => {
+  if (event.target === $("attention-dialog")) closeAttentionDialog();
 });
 $("diaries").addEventListener("click", (event) => {
   const target = event.target.closest("[data-diary-date]");

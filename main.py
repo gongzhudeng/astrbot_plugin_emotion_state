@@ -25,6 +25,7 @@ from .core.attention import (
     attention_status_label,
     is_attention_overdue,
     is_open_attention,
+    normalize_attention_content,
     select_attention_items,
 )
 from .core.attention_rules import catch_user_attention
@@ -74,6 +75,7 @@ from .core.models import (
     AttentionObservation,
     DiaryEntry,
     EventObservation,
+    EventTrace,
     ExpressionGuidance,
     IntrinsicParams,
     SensitivityParams,
@@ -181,7 +183,7 @@ def _require_json_object(raw: str) -> dict[str, Any]:
     PLUGIN_NAME,
     "灵犀 · 内心世界",
     "私聊专用的连续情绪、心事、每日回顾与亲密状态系统。",
-    "v0.3.14",
+    "v0.3.15",
     "https://github.com/gongzhudeng/astrbot_plugin_emotion_state",
 )
 class EmotionStatePlugin(Star):
@@ -2447,6 +2449,12 @@ class EmotionStatePlugin(Star):
             ["POST"],
             "Archive an emotion state item",
         )
+        register(
+            f"/{PLUGIN_NAME}/page/attention/save",
+            self.attention_save_api,
+            ["POST"],
+            "Create or edit a dashboard attention item",
+        )
 
     @staticmethod
     def _api_user_key() -> str:
@@ -2582,6 +2590,18 @@ class EmotionStatePlugin(Star):
                         ),
                     },
                     "life_events_today": ledger.life_events_today,
+                    "selected_injection_events": [
+                        {
+                            "id": event.id,
+                            "fact": event.fact,
+                            "emotional_meaning": event.emotional_meaning,
+                            "category": event.category,
+                            "valence": event.valence,
+                            "intensity": event.intensity,
+                            "created_at": event.created_at,
+                        }
+                        for event in selected_events
+                    ],
                     "selected_injection_event_count": len(selected_events),
                     "max_injected_events": event_limit,
                     "injection_event_evaluations": [
@@ -2656,6 +2676,126 @@ class EmotionStatePlugin(Star):
                 "mood": ledger.to_dict()["mood"],
             },
         }
+
+    @staticmethod
+    def _normalize_webui_due_at(raw: Any) -> str | None:
+        """datetime-local string -> ISO with tz; empty stays empty. None = invalid."""
+        text_value = str(raw or "").strip()
+        if not text_value:
+            return ""
+        try:
+            parsed = datetime.fromisoformat(text_value)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.astimezone()
+        return parsed.isoformat()
+
+    async def attention_save_api(self):
+        payload = await request.get_json(silent=True) or {}
+        user_key = str(payload.get("session_id", "")).strip()
+        if not user_key:
+            return {"status": "error", "message": "session_id is required"}
+        mode = str(payload.get("mode", "")).strip().lower()
+        if mode not in {"create", "update"}:
+            return {"status": "error", "message": "mode must be create or update"}
+
+        content = normalize_attention_content(str(payload.get("content", "")))
+        if not content:
+            return {"status": "error", "message": "内容不能为空"}
+        kind = str(payload.get("kind", "follow_up")).strip().lower()
+        if kind not in {"commitment", "plan", "remember", "follow_up"}:
+            return {"status": "error", "message": "类型无效"}
+        due_at = self._normalize_webui_due_at(payload.get("due_at"))
+        if due_at is None:
+            return {"status": "error", "message": "截止时间格式无效"}
+        time_hint = str(payload.get("time_hint", "")).strip()[:40]
+
+        if mode == "create":
+            observation = AttentionObservation(
+                action="create",
+                content=content,
+                kind=kind,
+                status="open",
+                actor="user",
+                time_hint=time_hint,
+                due_at=due_at,
+                confidence=1.0,
+                explicit=True,
+                source="webui",
+                evidence_quote="WebUI 手动添加",
+                evidence_speaker="user",
+            )
+            _, applied, reason = await self.service.observe_attention(
+                user_key, observation
+            )
+            if not applied:
+                return {
+                    "status": "error",
+                    "message": f"保存失败：{reason}",
+                    "reason": reason,
+                }
+            ledger = await self.service.get(user_key, settle=False)
+            return {
+                "status": "ok",
+                "data": {"state_version": ledger.state_version},
+            }
+
+        item_id = str(payload.get("item_id", "")).strip()
+        if not item_id:
+            return {"status": "error", "message": "缺少 item_id"}
+        try:
+            expected_version = int(payload.get("item_version"))
+        except (TypeError, ValueError):
+            return {"status": "error", "message": "版本信息无效，请刷新后重试"}
+        status = str(payload.get("status", "open")).strip().lower()
+        if status not in {"open", "proposed", "completed", "cancelled"}:
+            return {"status": "error", "message": "状态无效"}
+
+        def _edit(current: StateLedger) -> StateLedger:
+            target = next(
+                (i for i in current.attention_items if i.id == item_id), None
+            )
+            if target is None:
+                raise ValueError("该事项不存在，可能已被清理")
+            if expected_version != target.version:
+                raise ValueError("该事项刚被其他操作更新，请刷新后重试")
+            target.content = content
+            target.kind = kind
+            if target.status != status:
+                stamp = iso_now()
+                target.completed_at = stamp if status == "completed" else ""
+                target.archived_at = stamp if status == "cancelled" else ""
+            target.status = status
+            target.time_hint = time_hint
+            # Empty string clears the deadline on purpose: the item becomes a
+            # long-running one that the janitor never expires.
+            target.due_at = due_at
+            target.explicit = True
+            target.updated_at = iso_now()
+            target.version += 1
+            target.evidence.append(
+                EventTrace(
+                    at=iso_now(),
+                    kind="webui_manual_edit",
+                    amount=0.0,
+                    note="看板手动编辑",
+                    source="webui",
+                )
+            )
+            target.evidence = target.evidence[-30:]
+            return current
+
+        try:
+            ledger = await self.service.mutate(
+                user_key,
+                "webui_attention_edit",
+                _edit,
+                {"item_id": item_id, "status": status},
+            )
+        except ValueError as exc:
+            return {"status": "error", "message": str(exc)}
+        return {"status": "ok", "data": {"state_version": ledger.state_version}}
 
     async def rules_api(self):
         payload = await request.get_json(silent=True) or {}

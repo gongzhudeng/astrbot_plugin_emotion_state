@@ -2,7 +2,7 @@ name: astrbot_plugin_emotion_state
 display_name: 灵犀 · 内心世界
 desc: 私聊专用的连续情绪、心事、每日回顾与亲密状态系统。
 author: 灵犀
-version: v0.3.16
+version: v0.3.17
 repo: https://github.com/gongzhudeng/astrbot_plugin_emotion_state
 support_platforms:
   - aiocqhttp

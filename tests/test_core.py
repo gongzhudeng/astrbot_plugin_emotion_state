@@ -1910,3 +1910,78 @@ def test_local_catch_stores_only_the_reminder_clause() -> None:
     assert catch_user_attention("你记得我上次说的那个计划吗？") is None
     assert catch_user_attention("好的我记住了") is None
     assert catch_user_attention("今天天气不错") is None
+
+
+def test_resolve_due_at_dawn_semantics() -> None:
+    from astrbot_plugin_emotion_state.core.attention import resolve_due_at
+
+    tz = timezone(timedelta(hours=8))
+    dawn = datetime(2026, 9, 11, 1, 9, tzinfo=tz)
+    # 凌晨01:09说的"明天"指当天白天（人类语感），不是下一个日历日
+    assert datetime.fromisoformat(resolve_due_at("明天", dawn)).date() == datetime(
+        2026, 9, 11, tzinfo=tz
+    ).date()
+    # 凌晨的"今晚"仍指当晚
+    assert datetime.fromisoformat(resolve_due_at("今晚", dawn)).date() == datetime(
+        2026, 9, 11, tzinfo=tz
+    ).date()
+    # 凌晨的"后天"是明天的次日
+    assert datetime.fromisoformat(resolve_due_at("后天", dawn)).date() == datetime(
+        2026, 9, 12, tzinfo=tz
+    ).date()
+    # 白天说的"明天"保持下一个日历日
+    daytime = datetime(2026, 9, 11, 14, 0, tzinfo=tz)
+    assert datetime.fromisoformat(resolve_due_at("明天", daytime)).date() == datetime(
+        2026, 9, 12, tzinfo=tz
+    ).date()
+
+
+def test_local_catch_due_at_dawn_semantics() -> None:
+    from astrbot_plugin_emotion_state.core.attention_rules import _due_at
+
+    tz = timezone(timedelta(hours=8))
+    dawn = datetime(2026, 9, 11, 1, 9, tzinfo=tz)
+    assert datetime.fromisoformat(_due_at("明天", dawn)).date() == datetime(
+        2026, 9, 11, tzinfo=tz
+    ).date()
+    daytime = datetime(2026, 9, 11, 14, 0, tzinfo=tz)
+    assert datetime.fromisoformat(_due_at("明天", daytime)).date() == datetime(
+        2026, 9, 12, tzinfo=tz
+    ).date()
+
+
+def test_format_attention_timing_is_dynamic() -> None:
+    from astrbot_plugin_emotion_state.core.attention import format_attention_timing
+
+    tz = timezone(timedelta(hours=8))
+
+    def item(**kwargs: object) -> AttentionItem:
+        return AttentionItem(
+            content=kwargs.pop("content", "事项"),  # type: ignore[arg-type]
+            kind="plan",
+            confidence=0.9,  # type: ignore[arg-type]
+            **kwargs,  # type: ignore[arg-type]
+        )
+
+    base = datetime(2026, 9, 12, 10, 0, tzinfo=tz)
+    frozen = item(time_hint="明天", due_at="2026-09-13T23:59:00+08:00")
+    assert format_attention_timing(frozen, base) == "明天"
+    assert format_attention_timing(
+        frozen, datetime(2026, 9, 13, 9, 0, tzinfo=tz)
+    ) == "今天"
+    assert format_attention_timing(
+        frozen, datetime(2026, 9, 14, 9, 0, tzinfo=tz)
+    ) == "已过期（原定9月13日）"
+    assert format_attention_timing(
+        item(time_hint="", due_at="2026-09-14T23:59:00+08:00"), base
+    ) == "后天"
+    assert format_attention_timing(
+        item(time_hint="", due_at="2026-09-20T23:59:00+08:00"), base
+    ) == "9月20日"
+    # 无 due_at 回落到原 time_hint
+    assert format_attention_timing(item(time_hint="以后"), base) == "以后"
+    # 进行性提示原样保留
+    assert (
+        format_attention_timing(item(content="每晚睡前说晚安", time_hint="每晚"), base)
+        == "每晚"
+    )

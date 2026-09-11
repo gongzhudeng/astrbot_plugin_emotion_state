@@ -23,6 +23,7 @@ from astrbot.core.provider.entities import ProviderRequest
 from .core.attention import (
     attention_kind_label,
     attention_status_label,
+    format_attention_timing,
     is_attention_overdue,
     is_open_attention,
     normalize_attention_content,
@@ -183,7 +184,7 @@ def _require_json_object(raw: str) -> dict[str, Any]:
     PLUGIN_NAME,
     "灵犀 · 内心世界",
     "私聊专用的连续情绪、心事、每日回顾与亲密状态系统。",
-    "v0.3.16",
+    "v0.3.17",
     "https://github.com/gongzhudeng/astrbot_plugin_emotion_state",
 )
 class EmotionStatePlugin(Star):
@@ -1310,6 +1311,8 @@ class EmotionStatePlugin(Star):
                 '（如"[图片消息]"或原话片段，不得只写"好了/完成了"），'
                 "evidence_speaker 填说出该记录的一方（user/assistant），"
                 "confidence ≥ 0.78。证据不足就跳过该事项，不要编造。\n"
+                "- **当初创建事项时的那句承诺原话不算完成证据**——它只证明约定"
+                "存在，不证明事情已做，不要引用它来 complete。\n"
                 f"待办清单：{json.dumps(attention_view, ensure_ascii=False)}\n"
             )
         else:
@@ -1321,16 +1324,35 @@ class EmotionStatePlugin(Star):
             '- 双方约定或承诺（如"明天给你点奶茶"、"晚上拍给你看"、"我答应你……"）\n'
             '- 用户自己正在进行或打算做的事（如"我再弄一个插件"、"我要做个语音模型"）\n'
             "- 用户要求后续继续跟进的话题\n"
-            '有就输出 action="create"，字段：content（写明是谁的什么事）、'
-            "kind（commitment/plan/remember/follow_up）、time_hint、due_at"
-            "（能确定就填 ISO 时间，不确定一律留空，表示长期挂起）、"
+            '有就输出 action="create"，字段：content（写明是谁的什么事，'
+            f"{naming_rule}，禁止\"用户\"\"角色\"泛称）、"
+            "kind（commitment/plan/remember/follow_up）、time_hint（保留原话里的相对词）、"
+            "due_at（一律写按当前日期时间换算后的绝对 ISO 时间，不要照抄\"明天\"；"
+            "凌晨0:00-4:59对方说的\"明天\"指当天白天；"
+            "不确定一律留空，表示长期挂起）、"
             "confidence（≥0.70）、explicit=true、evidence_quote（逐字引用用户原话）、"
             'evidence_speaker="user"。\n'
             "- 不要重复清单里已有的事项；不要为纯闲聊、纯情绪抒发、"
             "或已经完全结束的过去事实建项。\n"
             "- 拿不准时倾向于建项，后续复核还会再判断它是否完成。最多补建 3 项。\n"
         )
+        local_now = datetime.now().astimezone()
+        weekday_cn = "周" + "一二三四五六日"[local_now.weekday()]
+        nickname = str(self.config.get("user_nickname", "") or "").strip()
+        persona_name = str(self.config.get("persona_name", "") or "").strip()
+        if nickname and persona_name:
+            naming_rule = (
+                f'称呼双方必须用具体名字：对方称"{nickname}"、'
+                f'你自己称"{persona_name}"'
+            )
+        else:
+            naming_rule = (
+                "称呼双方必须用对话前缀里的具体昵称"
+                "（对方用[昵称 的前缀名，你自己用人设名字）"
+            )
         prompt = (
+            f"当前日期时间：{local_now.strftime('%Y-%m-%d %H:%M')}（{weekday_cn}）。"
+            "判断相对时间时以此为锚；凌晨0:00-4:59对方说的\"明天\"指当天白天。\n"
             "请只返回 JSON 对象，判断以下最近私聊记录，完成两个任务。\n"
             "## 任务一：心事与情绪影响\n"
             "- 逐条考虑玩笑、转发、引用和前后文；讨论外部内容（视频、抖音、新闻、别人）"
@@ -2338,7 +2360,7 @@ class EmotionStatePlugin(Star):
             f"[{attention_kind_label(item.kind)}/{attention_status_label(item.status)}] "
             f"{item.content}"
             + (
-                f"（{item.time_hint or item.due_at}）"
+                f"（{format_attention_timing(item)}）"
                 if item.time_hint or item.due_at
                 else ""
             )

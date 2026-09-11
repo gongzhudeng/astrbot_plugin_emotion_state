@@ -8,6 +8,7 @@ from datetime import datetime
 
 from .attention import (
     attention_kind_label,
+    format_attention_timing,
     is_attention_overdue,
     select_attention_items,
 )
@@ -190,7 +191,7 @@ def build_snapshot(
             lines.append("仍需留意或接续的事项：")
             for item in attention_items:
                 status = "待双方确认" if item.status == "proposed" else "仍待关注"
-                timing = item.time_hint or item.due_at
+                timing = format_attention_timing(item, now)
                 overdue = (
                     "，时间已到但尚无完成证据" if is_attention_overdue(item) else ""
                 )

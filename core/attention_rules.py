@@ -59,9 +59,12 @@ def _time_hint(text: str) -> str:
 
 def _due_at(text: str, now: datetime | None = None) -> str:
     current = now or datetime.now().astimezone()
-    days = 2 if "后天" in text else 1 if "明天" in text else 0
-    if not days:
+    raw = 2 if "后天" in text else 1 if "明天" in text else 0
+    if not raw:
         return ""
+    # 凌晨语感：0:00-4:59 说的"明天"指当天白天（与 attention.resolve_due_at 一致）
+    dawn_shift = 1 if 0 <= current.hour < 5 else 0
+    days = max(raw - dawn_shift, 0)
     target = (current + timedelta(days=days)).replace(
         hour=23, minute=59, second=59, microsecond=0
     )

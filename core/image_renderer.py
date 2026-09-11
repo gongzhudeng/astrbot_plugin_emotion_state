@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .attention import format_attention_timing
 from .models import AttentionItem, InnerEvent, StateLedger, parse_time
 from .style_kit import Canvas, c, font
 
@@ -430,7 +431,7 @@ class EmotionStateImageRenderer:
             for line in lines:
                 cv.text(136, ly, line, content_f, ink)
                 ly += 36
-            timing = item.time_hint or item.due_at
+            timing = format_attention_timing(item)
             if timing:
                 cv.text(136, ly + 8, f"时间提示：{timing}", font(16, 450), sub)
             y += card_h + 20

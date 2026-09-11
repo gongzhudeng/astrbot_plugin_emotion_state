@@ -144,6 +144,10 @@ def resolve_due_at(time_hint: str, now: datetime | None = None) -> str:
     anchor = (now or utc_now()).astimezone()
     text = str(time_hint or "").strip()
 
+    # 凌晨语感：0:00-4:59 还没睡的人说"明天"，通常指当天白天（心理上的
+    # "今天"仍是日历上的今天，而不是已经翻页的日期）。
+    dawn_shift = 1 if 0 <= anchor.hour < 5 else 0
+
     def due(end_of_day: bool, days: int = 0, hours: float = 0.0) -> str:
         moment = anchor + timedelta(days=days, hours=hours)
         if end_of_day:
@@ -153,7 +157,7 @@ def resolve_due_at(time_hint: str, now: datetime | None = None) -> str:
     day_offsets = (("大后天", 3), ("后天", 2), ("明天", 1), ("明晚", 1), ("明早", 1))
     for cue, offset in day_offsets:
         if cue in text:
-            return due(True, days=offset)
+            return due(True, days=max(offset - dawn_shift, 0))
     if re.search(r"今晚|今夜|今天|当晚", text):
         return due(True)
     if (
@@ -190,6 +194,35 @@ def resolve_due_at(time_hint: str, now: datetime | None = None) -> str:
         if hours > 0:
             return due(False, hours=hours)
     return ""
+
+
+def format_attention_timing(item: AttentionItem, now: datetime | None = None) -> str:
+    """Display word for injection/rendering, derived from the absolute due time.
+
+    Stored time_hint words ("明天") are frozen at creation time; deriving the
+    word from due_at at display time keeps "明天" turning into "今天" once the
+    day actually arrives. Falls back to time_hint when no due time exists.
+    """
+    if _ONGOING_ATTENTION_CUES.search(f"{item.time_hint} {item.content}"):
+        return item.time_hint  # 进行性提示（每晚/每天…）原样保留
+    due_text = item.due_at or resolve_due_at(item.time_hint, now)
+    if not due_text:
+        return item.time_hint
+    try:
+        due_dt = parse_time(due_text).astimezone()
+    except (TypeError, ValueError):
+        return item.time_hint
+    anchor = (now or utc_now()).astimezone()
+    days = (due_dt.date() - anchor.date()).days
+    if days < 0:
+        return f"已过期（原定{due_dt.month}月{due_dt.day}日）"
+    if days == 0:
+        return "今天"
+    if days == 1:
+        return "明天"
+    if days == 2:
+        return "后天"
+    return f"{due_dt.month}月{due_dt.day}日"
 
 
 def archive_expired_attention_items(

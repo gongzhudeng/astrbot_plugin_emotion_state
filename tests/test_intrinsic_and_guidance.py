@@ -1099,3 +1099,52 @@ def test_mood_label_positive_requires_calm_body() -> None:
     assert mood_label(0.7, 0.65, 0.7) == "温和愉快"  # 雀跃 gated by tension
     assert mood_label(0.52, 0.59, 0.52) == "明快开心"  # just under the gate
     assert mood_label(0.52, 0.6, 0.52) == "温和愉快"  # gate boundary
+
+
+@pytest.mark.asyncio
+async def test_run_batch_review_prompt_assembles_with_naming_rule() -> None:
+    """Regression for v0.3.17: naming_rule/time anchor must be assigned before
+    the attention_section build. Misplaced assignment made every review loop
+    crash with UnboundLocalError, silently stopping background settlement."""
+    from types import SimpleNamespace
+
+    from astrbot_plugin_emotion_state.main import EmotionStatePlugin
+    from astrbot_plugin_emotion_state.core.models import StateLedger
+
+    plugin = EmotionStatePlugin.__new__(EmotionStatePlugin)
+    plugin.config = {"user_nickname": "Mando", "persona_name": "小怡"}
+
+    ledger = StateLedger(user_key="private:batch")
+    ledger.message_watermark = 5
+    ledger.last_reviewed_watermark = 0
+
+    async def fake_get(user_key, settle=True):
+        return ledger
+
+    async def fake_mutate(user_key, action, mutation, audit_detail=None):
+        return ledger
+
+    plugin.service = SimpleNamespace(get=fake_get, mutate=fake_mutate)
+
+    async def fake_lookup(session_id, since="", limit=600):
+        return [{"speaker": "user", "at": "", "text": "明天下班聚餐拍照给你看"}]
+
+    plugin.context = SimpleNamespace(
+        _livingmemory_get_attention_history=fake_lookup
+    )
+
+    captured: dict[str, str] = {}
+
+    async def fake_complete(prompt, user_key, task=None, validate=None):
+        captured["prompt"] = prompt
+        assert validate('{"event_observations": [], "attention_observations": []}')
+        return '{"event_observations": [], "attention_observations": []}', "fake"
+
+    plugin.gateway = SimpleNamespace(complete=fake_complete)
+
+    await plugin._run_batch_review("private:batch")
+
+    assert "称呼双方必须用具体名字：对方称\"Mando\"、你自己称\"小怡\"" in captured["prompt"]
+    assert "当前日期时间：" in captured["prompt"]
+    assert "## 待关注事项补建（第三任务）" in captured["prompt"]
+    assert "用户：明天下班聚餐拍照给你看" in captured["prompt"]

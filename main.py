@@ -184,7 +184,7 @@ def _require_json_object(raw: str) -> dict[str, Any]:
     PLUGIN_NAME,
     "灵犀 · 内心世界",
     "私聊专用的连续情绪、心事、每日回顾与亲密状态系统。",
-    "v0.3.17",
+    "v0.3.18",
     "https://github.com/gongzhudeng/astrbot_plugin_emotion_state",
 )
 class EmotionStatePlugin(Star):
@@ -1292,6 +1292,22 @@ class EmotionStatePlugin(Star):
             for item in ledger.attention_items
             if is_open_attention(item)
         ][:8]
+        # naming_rule 在下方 attention_section 的补建段就要用到，必须先于拼接赋值
+        # （v0.3.17 曾误放在 prompt= 之前，导致 batch review 每轮 UnboundLocalError）
+        local_now = datetime.now().astimezone()
+        weekday_cn = "周" + "一二三四五六日"[local_now.weekday()]
+        nickname = str(self.config.get("user_nickname", "") or "").strip()
+        persona_name = str(self.config.get("persona_name", "") or "").strip()
+        if nickname and persona_name:
+            naming_rule = (
+                f'称呼双方必须用具体名字：对方称"{nickname}"、'
+                f'你自己称"{persona_name}"'
+            )
+        else:
+            naming_rule = (
+                "称呼双方必须用对话前缀里的具体昵称"
+                "（对方用[昵称 的前缀名，你自己用人设名字）"
+            )
         attention_section = "\n## 待关注事项核对（第二任务）\n"
         if attention_view:
             attention_section += (
@@ -1336,20 +1352,6 @@ class EmotionStatePlugin(Star):
             "或已经完全结束的过去事实建项。\n"
             "- 拿不准时倾向于建项，后续复核还会再判断它是否完成。最多补建 3 项。\n"
         )
-        local_now = datetime.now().astimezone()
-        weekday_cn = "周" + "一二三四五六日"[local_now.weekday()]
-        nickname = str(self.config.get("user_nickname", "") or "").strip()
-        persona_name = str(self.config.get("persona_name", "") or "").strip()
-        if nickname and persona_name:
-            naming_rule = (
-                f'称呼双方必须用具体名字：对方称"{nickname}"、'
-                f'你自己称"{persona_name}"'
-            )
-        else:
-            naming_rule = (
-                "称呼双方必须用对话前缀里的具体昵称"
-                "（对方用[昵称 的前缀名，你自己用人设名字）"
-            )
         prompt = (
             f"当前日期时间：{local_now.strftime('%Y-%m-%d %H:%M')}（{weekday_cn}）。"
             "判断相对时间时以此为锚；凌晨0:00-4:59对方说的\"明天\"指当天白天。\n"

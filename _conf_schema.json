@@ -638,5 +638,22 @@
     "hint": "与上一项配套：待关注事项内容里用这个名字称呼 AI 角色，如“小怡”。",
     "type": "string",
     "default": ""
+  },
+  "attention_local_catch_enabled": {
+    "description": "启用本地关键词兜底建项",
+    "hint": "零成本双保险：聊天里出现“提醒我/别忘了/帮我记着”等硬指令时立即建项，不等模型总结。若出现误报（如闲聊里的“你还记得不”被当成托付），可以在这里整体关闭；关闭后强指令由批量复核模型链兜底。",
+    "type": "bool",
+    "default": true
+  },
+  "attention_expiry_grace_days": {
+    "description": "过期事项宽限天数",
+    "hint": "有明确截止时间的事项到期后，再保留该天数供模型确认完成/取消，之后才自动归档；0 表示到期即归档。",
+    "type": "float",
+    "slider": {
+      "min": 0,
+      "max": 7,
+      "step": 0.5
+    },
+    "default": 1.0
   }
 }

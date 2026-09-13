@@ -41,6 +41,9 @@ _STRONG_CATCH_CUES = re.compile(
     r"提醒我|提醒一下|记得(?:要)?|别忘了|别忘记|不要忘|帮我记着|帮我记住|"
     r"记一下|给我记住|一定要记住|务必记住|你要记住"
 )
+# 回忆式疑问："你还记得不""记不记得""记得吗""还记得吧"——是 lookup 不是托付；
+# 口语疑问常不带问号，须在命中 cue 后显式排除（v0.3.19）。
+_RECALL_QUESTION_CUES = re.compile(r"记不记得|记得不\s*$|记得吗|记得吧")
 # Chatter is split away so a reminder tacked onto a long message does not drag
 # the whole message into the ledger.
 _CLAUSE_SPLIT = re.compile(r"[。！？!？；;，,、\n]+")
@@ -126,11 +129,32 @@ def catch_user_attention(
     if re.search(r"[？?]\s*$", str(text or "").strip()):
         return None
 
+    focused = focus_clause(clean)
+    raw = str(text or "").strip()
+    # 回忆式疑问（"你还记得不""记不记得""记得吗""还记得吧"）是 lookup 而非托付；
+    # 口语疑问常无问号，须同时检查命中子句与原始消息（v0.3.19 误报修复）。
+    if _RECALL_QUESTION_CUES.search(focused) or _RECALL_QUESTION_CUES.search(raw):
+        return None
+    # 第二人称回忆式"你(还)记得…"（如"你记得我生日"）是在问 AI 记不记得，
+    # 不是托付；除非句内同时出现硬指令（"你记得明天提醒我吃药"）。
+    if re.search(r"你(?:还)?记(?:得|不记得)", focused) and not re.search(
+        r"提醒我|别忘了|别忘记|帮我记|帮我记住|记一下|给我记住|一定要记住|务必记住",
+        focused,
+    ):
+        return None
+    # 无问号但以疑问/征询语气收尾（吗/不/吧/么/呢）同样按疑问处理。
+    if re.search(r"[吗不吧么呢]\s*$", focused) or re.search(
+        r"[吗不吧么呢]\s*$", raw
+    ):
+        return None
+    # 空壳命中子句（<6 字）说明"记得"前后没有实质事由（如"你还记得不"），
+    # 存出来只是废条目；真提醒的命中段必然带着具体内容。
+    if len(focused) < 6:
+        return None
+
     # Store the reminder clause only; time hints still read from the full text
     # so a leading "明天" is not lost when it sits in its own clause.
-    content = focus_clause(clean)[:120] or clean[:120]
-    if len(content) < 4:
-        content = clean[:120]
+    content = focused[:120] or clean[:120]
     fingerprint = attention_fingerprint(content)
     for item in existing_items or []:
         if not is_open_attention(item):

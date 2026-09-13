@@ -1912,6 +1912,34 @@ def test_local_catch_stores_only_the_reminder_clause() -> None:
     assert catch_user_attention("今天天气不错") is None
 
 
+def test_local_catch_rejects_recall_questions_and_shell_clauses() -> None:
+    """v0.3.19: recall-style questions ("你还记得不") and sub-6-char shell
+    clauses must not become long-term remember items."""
+    from astrbot_plugin_emotion_state.core.attention_rules import catch_user_attention
+
+    # 回忆式疑问（无问号的口语疑问也要拦）
+    assert (
+        catch_user_attention("这个也是你之前发我的照片，你还记得不") is None
+    )
+    assert catch_user_attention("你还记得吗") is None
+    assert catch_user_attention("你还记不记得上次那个地方") is None
+    assert catch_user_attention("对啊上次说的那个你还记得吧") is None
+    # 第二人称回忆式：问 AI 记不记得，不是托付；带硬指令的除外
+    assert catch_user_attention("你记得我生日") is None
+    assert catch_user_attention("你记得明天出门提醒我吃药") is not None
+    # 空壳命中子句：没有实质事由
+    assert catch_user_attention("别忘了啊") is None
+    # 真提醒不受影响
+    keep = catch_user_attention("明天早上记得提醒我带身份证去办事")
+    assert keep is not None
+    assert "带身份证" in keep.content
+    assert catch_user_attention("别忘了带钥匙") is not None
+    # 时间仍从原句换算，逗号切分不丢截止时间
+    timed = catch_user_attention("明天，记得提醒我带身份证")
+    assert timed is not None
+    assert timed.due_at
+
+
 def test_resolve_due_at_dawn_semantics() -> None:
     from astrbot_plugin_emotion_state.core.attention import resolve_due_at
 

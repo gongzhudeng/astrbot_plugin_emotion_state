@@ -476,9 +476,12 @@ function renderInjectionView(payload) {
 
   $("inj-body-stage").textContent = text(presentation.body_reaction_stage) || "…";
 
-  const injectedEvents = Array.isArray(presentation.selected_injection_events)
-    ? presentation.selected_injection_events
-    : [];
+  // 后端把 selected_injection_events 放在 diagnostics 下（与 attention 的 presentation 位置不同）
+  const injectedEvents = Array.isArray(diagnostics.selected_injection_events)
+    ? diagnostics.selected_injection_events
+    : Array.isArray(presentation.selected_injection_events)
+      ? presentation.selected_injection_events
+      : [];
   $("inj-event-count").textContent = injectedEvents.length
     ? ` ${injectedEvents.length} 条`
     : "";

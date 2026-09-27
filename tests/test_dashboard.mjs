@@ -24,6 +24,10 @@ const elementIds = [
   "event-orbits",
   "attention-count",
   "attention-items",
+  "attention-add",
+  "attention-cancel",
+  "attention-apply",
+  "attention-dialog",
   "intimacy-stage",
   "intimacy-tier",
   "intimacy",
@@ -41,6 +45,16 @@ const elementIds = [
   "diary-next",
   "diary-page",
   "diagnostics",
+  "injection-count",
+  "inj-mood-label",
+  "inj-valence",
+  "inj-energy",
+  "inj-tension",
+  "inj-body-stage",
+  "inj-event-count",
+  "inj-events",
+  "inj-attention-count",
+  "inj-attention",
   "refresh-prompt",
   "prompt-kind",
   "prompt",
@@ -143,8 +157,8 @@ test("long event rows keep their status controls inside the panel", () => {
 test("emotion injection views are split into dedicated half-width panels", () => {
   assert.match(indexSource, /情绪注入 · 历史快照/);
   assert.match(indexSource, /情绪注入 · 实时预览/);
-  assert.doesNotMatch(indexSource, /injection-grid|injection-view/);
-  assert.doesNotMatch(stylesSource, /injection-grid|injection-view/);
+  assert.doesNotMatch(indexSource, /injection-grid/);
+  assert.doesNotMatch(stylesSource, /injection-grid/);
   assert.match(stylesSource, /\.adv-body\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/s);
   for (const id of ["refresh-prompt", "prompt-kind", "prompt", "preview-kind", "preview-prompt"]) {
     const matches = indexSource.match(new RegExp(`id="${id}"`, "g")) || [];
@@ -340,6 +354,41 @@ test("guidance panel flags a stale backend when the payload lacks can_say", asyn
   assert.equal(elements["guidance-rows"].innerHTML, "");
   assert.match(elements["guidance-note"].innerHTML, /重载「内心世界」/);
   assert.doesNotMatch(elements["guidance-rows"].innerHTML, /（无）/);
+});
+
+test("injection panel reads selected events from diagnostics, not presentation", async () => {
+  // 回归：后端 state_api 把 selected_injection_events 放在 diagnostics 下。
+  // 旧前端从 presentation 读 → "实际注入"面板永远显示"此刻没有心事被注入提示词"。
+  const { elements } = await exerciseGuidance({
+    ledger: ledger([]),
+    presentation: {
+      persona_intimacy_tier: "很亲密",
+      body_reaction_stage: "身体平静，没有明显性反应",
+      attention_items: [],
+    },
+    diagnostics: {
+      selected_injection_events: [
+        {
+          id: "event-injected",
+          fact: "他今晚全程夸我好看",
+          emotional_meaning: "被专注看着心里挺甜",
+          category: "episodic",
+          valence: 0.43,
+          intensity: 0.6,
+          created_at: "2026-09-27T22:40:00+08:00",
+        },
+      ],
+      selected_injection_event_count: 1,
+      selected_injection_attention_items: [],
+      selected_injection_attention_count: 0,
+    },
+  });
+  assert.match(elements["inj-events"].innerHTML, /他今晚全程夸我好看/);
+  assert.match(elements["inj-events"].innerHTML, /被专注看着心里挺甜/);
+  assert.doesNotMatch(elements["inj-events"].innerHTML, /此刻没有心事被注入提示词/);
+  assert.equal(elements["inj-event-count"].textContent, " 1 条");
+  assert.match(elements["inj-attention"].innerHTML, /此刻没有待关注事项被注入提示词/);
+  assert.equal(elements["injection-count"].textContent, "心事 1 · 待关注 0");
 });
 
 test("brand mark shows the synced plugin logo with a text fallback", () => {
@@ -554,10 +603,16 @@ test("daily review browser handles loading, filtering, and pagination", async ()
       deleteKind: "attention",
       deleteId: "attention-1<unsafe",
     },
-    closest: (selector) => selector === ".event-item" ? attentionRow : attentionButton,
+    // 真实 DOM：删除按钮没有 data-edit-id，closest("[data-edit-id]") 必须返回 null
+    closest: (selector) => {
+      if (selector === ".event-item") return attentionRow;
+      if (selector === "[data-edit-id]") return null;
+      return attentionButton;
+    },
   };
   elements["attention-items"].dispatch("click", {
-    target: { closest: () => attentionButton },
+    // 真实点击目标是被点按钮：data-edit-id 查不到祖先，返回 null
+    target: { closest: (selector) => selector === "[data-edit-id]" ? null : attentionButton },
   });
   assert.equal(postCalls.length, 1);
   assert.equal(elements["delete-confirm"].hidden, false);
@@ -581,10 +636,14 @@ test("daily review browser handles loading, filtering, and pagination", async ()
       deleteKind: "attention",
       deleteId: "attention-missing",
     },
-    closest: (selector) => selector === ".event-item" ? attentionRow : failedAttentionButton,
+    closest: (selector) => {
+      if (selector === ".event-item") return attentionRow;
+      if (selector === "[data-edit-id]") return null;
+      return failedAttentionButton;
+    },
   };
   elements["attention-items"].dispatch("click", {
-    target: { closest: () => failedAttentionButton },
+    target: { closest: (selector) => selector === "[data-edit-id]" ? null : failedAttentionButton },
   });
   assert.equal(postCalls.length, 2);
   assert.equal(elements["delete-confirm"].hidden, false);

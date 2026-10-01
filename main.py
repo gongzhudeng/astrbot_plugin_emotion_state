@@ -185,7 +185,7 @@ def _require_json_object(raw: str) -> dict[str, Any]:
     PLUGIN_NAME,
     "灵犀 · 内心世界",
     "私聊专用的连续情绪、心事、每日回顾与亲密状态系统。",
-    "v0.3.21",
+    "v0.3.22",
     "https://github.com/gongzhudeng/astrbot_plugin_emotion_state",
 )
 class EmotionStatePlugin(Star):
@@ -1353,8 +1353,13 @@ class EmotionStatePlugin(Star):
                 '（如"[图片消息]"或原话片段，不得只写"好了/完成了"），'
                 "evidence_speaker 填说出该记录的一方（user/assistant），"
                 "confidence ≥ 0.78。证据不足就跳过该事项，不要编造。\n"
-                "- **当初创建事项时的那句承诺原话不算完成证据**——它只证明约定"
-                "存在，不证明事情已做，不要引用它来 complete。\n"
+                "- **承诺与预告一律不算完成证据**：应允（\"知道啦\"\"行，给你拍\"）、"
+                "预告打算（\"我下午会去\"\"路上给你拍\"\"马上发你\"）、复述或重复约定，"
+                "不管这句话出自谁、也不管它是不是当初创建事项时的原话，"
+                "都只证明事情还没做，绝不能拿来 complete。\n"
+                "- 能 complete 的只有已完成动作的实迹：照片/视频/语音已经出现在聊天里，"
+                "或聊天明确描述事情已经发生（如\"提前买了\"\"已经办好\"）；"
+                "拿不准就跳过该事项，等下次复核再判。\n"
                 f"待办清单：{json.dumps(attention_view, ensure_ascii=False)}\n"
             )
         else:

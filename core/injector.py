@@ -229,6 +229,67 @@ def build_snapshot(
     return "\n".join(lines)
 
 
+def _mood_level(value: float) -> str:
+    """Shared mood intensity wording (same thresholds as schedule context)."""
+    if value >= 0.68:
+        return "较高"
+    if value >= 0.38:
+        return "中等"
+    return "较低"
+
+
+def build_live_schedule_context(
+    ledger: StateLedger,
+    max_attention_items: int = 5,
+    *,
+    options: InjectionOptions | None = None,
+) -> dict[str, str]:
+    """Low-sensitivity live context for background schedule correction.
+
+    Unlike :func:`build_snapshot`, this never includes private state
+    (intimacy, jealousy, body reactions).  It exposes only the current mood
+    wording and the active attention items, so sibling plugins can consume it
+    without leaking the private-chat boundary.
+
+    Returns ``{"mood": str, "attention": str}``; both values are "" when the
+    ledger carries nothing usable.
+    """
+    opts = options or InjectionOptions()
+    now = opts.current_time()
+    mood = ledger.mood
+    mood_text = ""
+    if str(getattr(mood, "label", "") or "").strip():
+        parts = [
+            f"当前心情：{mood.label}",
+            f"能量{_mood_level(mood.energy)}，紧张程度{_mood_level(mood.tension)}",
+        ]
+        temperament = getattr(ledger, "today_temperament", None)
+        if temperament is not None and str(getattr(temperament, "word", "") or "").strip():
+            parts.append(f"今日气质：{temperament.word}")
+        mood_text = "；".join(parts) + "。"
+
+    limit = max(0, int(max_attention_items))
+    attention_text = ""
+    if limit > 0:
+        attention_items = select_attention_items(
+            ledger.attention_items, limit
+        )
+        lines: list[str] = []
+        for item in attention_items:
+            status = "待双方确认" if item.status == "proposed" else "仍待关注"
+            timing = format_attention_timing(item, now)
+            overdue = (
+                "，时间已到但尚无完成证据" if is_attention_overdue(item) else ""
+            )
+            suffix = f"，时间提示：{timing}" if timing else ""
+            lines.append(
+                f"- [{attention_kind_label(item.kind)}；{status}] "
+                f"{normalize_fact(item.content, 180)}{suffix}{overdue}"
+            )
+        attention_text = "\n".join(lines)
+    return {"mood": mood_text, "attention": attention_text}
+
+
 def build_guidance_part(
     ledger: StateLedger,
     *,

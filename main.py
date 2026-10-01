@@ -51,6 +51,7 @@ from .core.injector import (
     InjectionSnapshot,
     build_guidance_part,
     build_injection_content,
+    build_live_schedule_context,
     build_snapshot,
     capture_injection_snapshot,
     capture_injection_snapshot_from_content,
@@ -184,7 +185,7 @@ def _require_json_object(raw: str) -> dict[str, Any]:
     PLUGIN_NAME,
     "灵犀 · 内心世界",
     "私聊专用的连续情绪、心事、每日回顾与亲密状态系统。",
-    "v0.3.19",
+    "v0.3.21",
     "https://github.com/gongzhudeng/astrbot_plugin_emotion_state",
 )
 class EmotionStatePlugin(Star):
@@ -232,6 +233,7 @@ class EmotionStatePlugin(Star):
         self.context._emotion_state_review_context = self._review_context
         self.context._emotion_state_schedule_context = self._schedule_context
         self.context._emotion_state_get_prompt_context = self._prompt_context
+        self.context._emotion_state_get_live_context = self._live_context
         self._register_web_apis()
 
     def _config(self, key: str, default: Any = None) -> Any:
@@ -448,6 +450,11 @@ class EmotionStatePlugin(Star):
             == self._prompt_context
         ):
             delattr(self.context, "_emotion_state_get_prompt_context")
+        if (
+            getattr(self.context, "_emotion_state_get_live_context", None)
+            == self._live_context
+        ):
+            delattr(self.context, "_emotion_state_get_live_context")
         for name in (
             "_settlement_task",
             "_proactive_task",
@@ -735,6 +742,25 @@ class EmotionStatePlugin(Star):
             f"最近回顾摘要：{summary or '暂无摘要'}\n"
             "这是软参考，只用于安排没有明确约定的时段和穿搭氛围；"
             "不得覆盖已确认计划、天气、安全或日程格式约束。"
+        )
+
+    async def _live_context(
+        self, user_key: str, max_attention_items: int = 5
+    ) -> dict[str, str]:
+        """Low-sensitivity live mood + attention context for schedule correction.
+
+        Never settles the ledger and never exposes private snapshot fields.
+        """
+        key = str(user_key or "").strip()
+        if not key or not self._config("enabled", True):
+            return {"mood": "", "attention": ""}
+        ledger = await self.service.get(key, settle=False)
+        if ledger is None:
+            return {"mood": "", "attention": ""}
+        return build_live_schedule_context(
+            ledger,
+            max(0, int(max_attention_items)),
+            options=self._injection_options(),
         )
 
     @staticmethod

@@ -18,6 +18,11 @@ from .models import (
 )
 
 _TERMINAL_STATUSES = {"completed", "cancelled", "superseded", "archived"}
+# v0.3.25 premature-completion guard: if an item's due_at is still more than
+# this many hours away, a model-suggested ``complete`` cannot be trusted
+# ("晚上拍视频" closed at 13:21, "晚饭" closed at 15:04). Code-level gate,
+# independent of prompt discipline; 0 disables the guard entirely.
+_PREMATURE_COMPLETE_GUARD_HOURS = 3.0
 # Sources trusted to mutate attention items. ``local_catch`` is the zero-cost
 # catch for explicit reminder wording and never depends on a model call.
 # ``webui`` is a human editing the dashboard by hand: highest trust.
@@ -510,9 +515,43 @@ def attention_observation_rejection(
     return None
 
 
+def _premature_complete_rejection(
+    item: AttentionItem,
+    guard_hours: float,
+) -> str | None:
+    """Reject completes whose promised window has not even started.
+
+    An item due tonight has no trustworthy completion evidence in the
+    afternoon: the reviewer can only see role-play phrasing, and every
+    mis-close so far happened hours before due_at. Items without a
+    parsable due_at, and due dates already in the past, are let through.
+    """
+    try:
+        guard = float(guard_hours)
+    except (TypeError, ValueError):
+        guard = _PREMATURE_COMPLETE_GUARD_HOURS
+    if guard <= 0:
+        return None
+    due_raw = str(getattr(item, "due_at", "") or "").strip()
+    if not due_raw:
+        return None
+    try:
+        due = parse_time(due_raw)
+    except (TypeError, ValueError):
+        return None
+    remaining = due - utc_now()
+    if remaining <= timedelta(0):
+        return None
+    if remaining > timedelta(hours=guard):
+        return "premature_completion_before_due"
+    return None
+
+
 def apply_attention_observation(
     ledger: StateLedger,
     observation: AttentionObservation,
+    *,
+    premature_complete_guard_hours: float | None = None,
 ) -> tuple[StateLedger, bool, str]:
     """Apply one attention observation without coupling it to emotional decay."""
     rejection = attention_observation_rejection(observation)
@@ -540,12 +579,21 @@ def apply_attention_observation(
         return ledger, False, "attention_item_not_found"
     if observation.action != "create" and current is None:
         return ledger, False, "attention_item_not_found"
-    if (
-        observation.action == "complete"
-        and current is not None
-        and not completion_evidence_matches_item(current, observation.evidence_quote)
-    ):
-        return ledger, False, "unrelated_completion_evidence"
+    if observation.action == "complete" and current is not None:
+        if not completion_evidence_matches_item(current, observation.evidence_quote):
+            return ledger, False, "unrelated_completion_evidence"
+        # v0.3.25: code-level gate — an item whose due_at is still hours away
+        # has no trustworthy completion evidence yet; model-suggested closes
+        # get skipped until the window is near. Human webui edits stay exempt.
+        if observation.source != "webui":
+            guard = (
+                _PREMATURE_COMPLETE_GUARD_HOURS
+                if premature_complete_guard_hours is None
+                else premature_complete_guard_hours
+            )
+            rejection = _premature_complete_rejection(current, guard)
+            if rejection:
+                return ledger, False, rejection
     if observation.action == "create" and current is None and not observation.content:
         return ledger, False, "empty_attention_content"
 

@@ -185,7 +185,7 @@ def _require_json_object(raw: str) -> dict[str, Any]:
     PLUGIN_NAME,
     "灵犀 · 内心世界",
     "私聊专用的连续情绪、心事、每日回顾与亲密状态系统。",
-    "v0.3.24",
+    "v0.3.25",
     "https://github.com/gongzhudeng/astrbot_plugin_emotion_state",
 )
 class EmotionStatePlugin(Star):
@@ -214,6 +214,9 @@ class EmotionStatePlugin(Star):
                 "attention_expiry_grace_days", 1.0
             ),
             negative_bias=self._float_config("sensitivity_negative_bias", 2.5),
+            premature_complete_guard_hours=self._float_config(
+                "attention_premature_complete_guard_hours", 3.0
+            ),
         )
         self.rules = LocalRuleEngine(self._list_config("custom_rules"))
         self.gateway = ProviderGateway(context, config)

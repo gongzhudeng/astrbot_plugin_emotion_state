@@ -56,6 +56,7 @@ class EmotionStateService:
         attention_auto_archive_days: float = 3.0,
         attention_expiry_grace_days: float = 1.0,
         negative_bias: float = 2.5,
+        premature_complete_guard_hours: float = 3.0,
     ) -> None:
         self.store = store
         self.half_life_hours = half_life_hours
@@ -72,6 +73,9 @@ class EmotionStateService:
         self.attention_expiry_grace_days = max(0.0, float(attention_expiry_grace_days))
         # Negativity bias for user-directed hurtful events (clamped in settlement).
         self.negative_bias = float(negative_bias)
+        # v0.3.25: model-suggested completes are skipped while due_at is still
+        # further away than this many hours (<=0 disables the guard).
+        self.premature_complete_guard_hours = float(premature_complete_guard_hours)
         self._locks: dict[str, asyncio.Lock] = {}
 
     def _intrinsic(self) -> IntrinsicParams | None:
@@ -379,7 +383,9 @@ class EmotionStateService:
                     reasons.append(f"attention:{rejection}")
                     continue
                 updated, applied, reason = apply_attention_observation(
-                    updated, attention
+                    updated,
+                    attention,
+                    premature_complete_guard_hours=self.premature_complete_guard_hours,
                 )
                 reasons.append(f"attention:{reason}")
                 attention_applied_count += int(applied)
@@ -470,7 +476,9 @@ class EmotionStateService:
                     reasons.append(f"attention:{rejection}")
                     continue
                 updated, applied, reason = apply_attention_observation(
-                    updated, observation
+                    updated,
+                    observation,
+                    premature_complete_guard_hours=self.premature_complete_guard_hours,
                 )
                 reasons.append(f"attention:{reason}")
                 applied_count += int(applied)
@@ -692,7 +700,11 @@ class EmotionStateService:
             return ledger, False, rejection
         async with self._lock_for(user_key):
             ledger = await asyncio.to_thread(self.store.load, user_key)
-            updated, applied, reason = apply_attention_observation(ledger, observation)
+            updated, applied, reason = apply_attention_observation(
+                ledger,
+                observation,
+                premature_complete_guard_hours=self.premature_complete_guard_hours,
+            )
             capacity_reasons: list[str] = []
             if applied:
                 (

@@ -2013,3 +2013,96 @@ def test_format_attention_timing_is_dynamic() -> None:
         format_attention_timing(item(content="每晚睡前说晚安", time_hint="每晚"), base)
         == "每晚"
     )
+
+
+# ----------------------------------------------------------------------
+# v0.3.25 premature-completion guard（时间守门员）
+# ----------------------------------------------------------------------
+def _guard_item(due_offset_hours: float | None) -> AttentionItem:
+    due_at = (
+        ""
+        if due_offset_hours is None
+        else (
+            datetime.now(timezone.utc) + timedelta(hours=due_offset_hours)
+        ).isoformat()
+    )
+    return AttentionItem(
+        id="evening-item",
+        content="晚上给你拍视频",
+        kind="commitment",
+        status="open",
+        explicit=True,
+        confidence=0.95,
+        due_at=due_at,
+    )
+
+
+def _guard_observation(item: AttentionItem, source: str = "attention_review"):
+    return AttentionObservation(
+        action="complete",
+        item_id=item.id,
+        item_version=item.version,
+        source=source,
+        evidence_quote="视频已经拍好发你了",
+        evidence_speaker="assistant",
+        confidence=0.95,
+    )
+
+
+def test_complete_blocked_while_due_far_in_future() -> None:
+    """due_at 还有 8 小时：模型建议的 complete 一律拒绝（本次误判场景）。"""
+    item = _guard_item(8.0)
+    ledger = StateLedger(user_key="private:guard", attention_items=[item])
+
+    _, applied, reason = apply_attention_observation(ledger, _guard_observation(item))
+
+    assert (applied, reason) == (False, "premature_completion_before_due")
+    assert ledger.attention_items[0].status == "open"
+
+
+def test_complete_allowed_when_due_passed_or_near() -> None:
+    """已过期与临近到期（<守门阈值）都放行，正常补标不受影响。"""
+    for offset in (-1.0, 1.0):
+        item = _guard_item(offset)
+        ledger = StateLedger(user_key="private:guard", attention_items=[item])
+
+        updated, applied, reason = apply_attention_observation(
+            ledger, _guard_observation(item)
+        )
+
+        assert (applied, reason) == (True, "applied"), offset
+        assert updated.attention_items[0].status == "completed", offset
+
+
+def test_complete_guard_exempts_webui_and_disabled() -> None:
+    """WebUI 人工操作是权威；守门阈值 0 表示整体关闭。"""
+    item = _guard_item(8.0)
+    ledger = StateLedger(user_key="private:guard", attention_items=[item])
+    updated, applied, reason = apply_attention_observation(
+        ledger, _guard_observation(item, source="webui")
+    )
+    assert (applied, reason) == (True, "applied")
+    assert updated.attention_items[0].status == "completed"
+
+    item2 = _guard_item(8.0)
+    ledger2 = StateLedger(user_key="private:guard", attention_items=[item2])
+    updated2, applied2, reason2 = apply_attention_observation(
+        ledger2,
+        _guard_observation(item2),
+        premature_complete_guard_hours=0.0,
+    )
+    assert (applied2, reason2) == (True, "applied")
+    assert updated2.attention_items[0].status == "completed"
+
+
+def test_complete_guard_ignores_items_without_due_at() -> None:
+    """无 due_at 的事项不守门，保持既有行为。"""
+    item = _guard_item(None)
+    ledger = StateLedger(user_key="private:guard", attention_items=[item])
+
+    updated, applied, reason = apply_attention_observation(
+        ledger, _guard_observation(item)
+    )
+
+    assert (applied, reason) == (True, "applied")
+    assert updated.attention_items[0].status == "completed"

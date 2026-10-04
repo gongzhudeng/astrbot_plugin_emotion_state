@@ -655,5 +655,16 @@
       "step": 0.5
     },
     "default": 1.0
+  },
+  "attention_premature_complete_guard_hours": {
+    "description": "提前完成守门（小时）",
+    "hint": "复核模型建议把某事项标记完成时，若事项的截止时间距现在还超过该小时数，一律拒绝（防止下午就把「晚上的约定」标成已完成）；截止时间已到或临近时放行；WebUI 手动操作不受限；0 表示关闭守门。",
+    "type": "float",
+    "slider": {
+      "min": 0,
+      "max": 12,
+      "step": 0.5
+    },
+    "default": 3.0
   }
 }

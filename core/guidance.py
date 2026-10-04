@@ -187,6 +187,8 @@ def build_guidance_prompt(
     style_hint: str = "",
     previous: dict[str, Any] | None = None,
     max_chars: int = 200,
+    user_name: str = "",
+    persona_name: str = "",
 ) -> str:
     effective = effective_mood(
         ledger,
@@ -231,6 +233,27 @@ def build_guidance_prompt(
         if style
         else ""
     )
+    # v0.3.23：称呼锚点随材料下发。事实里已经写清了是谁的什么事，建议里再复读
+    # 一次最容易把它说反（"他记得我的生日"）。显式给出两个名字 + "我"指谁，
+    # 让建议只能沿用事实里的归属，不能自行改写。
+    names = [name for name in (str(user_name or "").strip(),
+                               str(persona_name or "").strip()) if name]
+    if len(names) == 2:
+        naming_line = (
+            f"\n- **称呼与主客（必须与材料完全一致）**：用户本人叫「{names[0]}」，"
+            f"AI 角色本人叫「{names[1]}」。你在写「我」时指的是 AI 角色本人"
+            f"（{names[1]}）；提到用户时必须写「{names[0]}」。"
+            "如果材料里某件事属于用户（例如用户过生日、用户记着约定），"
+            "照搬材料的说法即可，绝不能改成「我生日」「我记得」这种反过来的表述。\n"
+            "- 建议里的称呼必须和材料里出现的一致；材料已用具体名字的，"
+            "不要改写成「用户」「他」等泛称，也不要反过来把名字安到另一方头上。\n"
+        )
+    else:
+        naming_line = (
+            "\n- **称呼与主客（必须与材料完全一致）**：不要新增第一人称。"
+            "材料里某件事属于用户还是属于角色，已经写清楚了，照搬即可，"
+            "不要因为读到用户原话里的「我」就把它当成角色自己的事。\n"
+        )
     return (
         "你是角色的内心声音。请根据以下内心状态材料，为角色的下一次回复生成简短的表达建议，"
         "只返回 JSON 对象，字段为 tone、can_say、avoid。"
@@ -247,6 +270,7 @@ def build_guidance_prompt(
         "禁止用“事件1”“事件3”“之前那件事”这类编号或指代——读建议的人看不到完整的事件清单。"
         "\n- 每件事的发生时间以材料里的 when 为准，表述时写明（如“昨天中午”），"
         "不得把早前发生的事说成今天或刚刚发生。"
+        + naming_line
         + style_line
         + f"材料：{json.dumps(payload, ensure_ascii=False)}"
     )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -927,23 +928,100 @@ async def test_recent_chat_messages_uses_livingmemory_handshake() -> None:
     from astrbot_plugin_emotion_state.main import EmotionStatePlugin
 
     plugin = EmotionStatePlugin.__new__(EmotionStatePlugin)
+    plugin.config = {}
+    plugin._last_chat_rows = []
 
     async def lookup(session_id, since="", limit=600):
         return [
-            {"speaker": "user", "at": "", "text": "今天好累"},
-            {"speaker": "assistant", "at": "", "text": "抱抱"},
-            {"speaker": "user", "at": "", "text": ""},
+            {"speaker": "user", "name": "Mando", "at": "", "text": "今天好累"},
+            {"speaker": "assistant", "name": "小怡", "at": "", "text": "抱抱"},
+            {"speaker": "user", "name": "Mando", "at": "", "text": ""},
         ]
 
     plugin.context = SimpleNamespace(_livingmemory_get_attention_history=lookup)
     tail = await plugin._recent_chat_messages("private:x", limit=10)
-    assert "用户：今天好累" in tail
-    assert "角色：抱抱" in tail
+    # v0.3.23: the real display names survive into the chat tail. Hardcoding
+    # "用户"/"角色" here is what let the model swap the two speakers, because it
+    # could no longer tell who "我" was when rewriting the conversation.
+    assert "Mando：今天好累" in tail
+    assert "小怡：抱抱" in tail
     assert "：''" not in tail
+    # Blank-text rows are still dropped.
+    assert tail.count("：") == 2
 
     # Missing handshake: empty tail, no exception (batch stays pending).
     plugin.context = SimpleNamespace()
     assert await plugin._recent_chat_messages("private:x") == ""
+
+
+def test_resolve_speaker_names_prefers_config_then_chat_record() -> None:
+    """v0.3.23: one shared priority for all three generated sections.
+
+    A name that means one thing in the attention section and the opposite in the
+    event section is what produced "用户记得今天是我生日", so the resolution
+    order is asserted here instead of being re-derived at each call site.
+    """
+    from types import SimpleNamespace
+
+    from astrbot_plugin_emotion_state.main import EmotionStatePlugin
+
+    rows = [
+        {"speaker": "user", "name": "Mando", "text": "hi"},
+        {"speaker": "assistant", "name": "小怡", "text": "yo"},
+    ]
+
+    plugin = EmotionStatePlugin.__new__(EmotionStatePlugin)
+
+    # 1. Both configured -> configuration wins over the chat record.
+    plugin.config = {"user_nickname": "登登", "persona_name": "小怡"}
+    assert plugin._resolve_speaker_names(rows) == ("登登", "小怡")
+
+    # 2. Nothing configured -> the chat record's real names are used.
+    plugin.config = {}
+    assert plugin._resolve_speaker_names(rows) == ("Mando", "小怡")
+
+    # 3. Only one side configured -> that side wins, the other falls back, so the
+    #    rule never degrades to a half-empty naming instruction.
+    plugin.config = {"user_nickname": "登登", "persona_name": ""}
+    assert plugin._resolve_speaker_names(rows) == ("登登", "小怡")
+
+    # 4. No names anywhere -> empty strings, caller degrades to generic labels.
+    plugin.config = {}
+    assert plugin._resolve_speaker_names(
+        [{"speaker": "user", "name": "", "text": "hi"}]
+    ) == ("", "")
+
+    # 5. Junk rows must not crash the resolver.
+    plugin.config = {}
+    assert plugin._resolve_speaker_names([None, "x", 1]) == ("", "")
+
+
+def test_naming_rule_avoids_ambiguous_subject_voice_construction() -> None:
+    """v0.3.23 regression: the old wording was "对方称X、你自己称Y".
+
+    In Chinese that construction has two opposite readings — "you call the other
+    party X" and "the other party calls you X" — so filling the nickname config
+    could swap the two people. The replacement names each person as the subject
+    and pins what "我" refers to.
+    """
+    from types import SimpleNamespace
+
+    from astrbot_plugin_emotion_state.main import EmotionStatePlugin
+
+    plugin = EmotionStatePlugin.__new__(EmotionStatePlugin)
+    rule = plugin._naming_rule("Mando", "小怡")
+
+    assert "用户本人叫「Mando」" in rule
+    assert "AI 角色本人叫「小怡」" in rule
+    # The ambiguous construction is gone for good.
+    assert "对方称" not in rule
+    assert "你自己称" not in rule
+    # "我" is pinned to the role, and the user's first person must be renamed.
+    assert "「我」**永远只指 AI 角色本人**" in rule
+    assert "绝不能变成「我记得…" in rule
+    # Vague labels stay banned, and the birthday trap is called out explicitly.
+    assert "禁止写「用户」「他」「对方」" in rule
+    assert "不要因为" in rule and "「今天是我生日」" in rule
 
 
 def test_negative_temperament_words_carry_shifts() -> None:
@@ -1113,6 +1191,7 @@ async def test_run_batch_review_prompt_assembles_with_naming_rule() -> None:
 
     plugin = EmotionStatePlugin.__new__(EmotionStatePlugin)
     plugin.config = {"user_nickname": "Mando", "persona_name": "小怡"}
+    plugin._last_chat_rows = []
 
     ledger = StateLedger(user_key="private:batch")
     ledger.message_watermark = 5
@@ -1127,7 +1206,14 @@ async def test_run_batch_review_prompt_assembles_with_naming_rule() -> None:
     plugin.service = SimpleNamespace(get=fake_get, mutate=fake_mutate)
 
     async def fake_lookup(session_id, since="", limit=600):
-        return [{"speaker": "user", "at": "", "text": "明天下班聚餐拍照给你看"}]
+        return [
+            {
+                "speaker": "user",
+                "name": "Mando",
+                "at": "",
+                "text": "明天下班聚餐拍照给你看",
+            }
+        ]
 
     plugin.context = SimpleNamespace(
         _livingmemory_get_attention_history=fake_lookup
@@ -1144,7 +1230,161 @@ async def test_run_batch_review_prompt_assembles_with_naming_rule() -> None:
 
     await plugin._run_batch_review("private:batch")
 
-    assert "称呼双方必须用具体名字：对方称\"Mando\"、你自己称\"小怡\"" in captured["prompt"]
-    assert "当前日期时间：" in captured["prompt"]
-    assert "## 待关注事项补建（第三任务）" in captured["prompt"]
-    assert "用户：明天下班聚餐拍照给你看" in captured["prompt"]
+    prompt = captured["prompt"]
+    # v0.3.23: the naming rule is now a shared block above all three tasks, so
+    # task one (the event facts) can no longer miss it — that omission is what
+    # produced "用户记得今天是我生日".
+    assert "**称呼与视角（所有字段一律遵守）**" in prompt
+    assert "用户本人叫「Mando」" in prompt
+    assert "AI 角色本人叫「小怡」" in prompt
+    # The rule must sit above task one, not only above the attention section.
+    assert prompt.index("**称呼与视角（所有字段一律遵守）**") < prompt.index(
+        "## 任务一：心事与情绪影响"
+    )
+    # Task one states the first-person anchor and the birthday trap explicitly.
+    assert "fact（**以 AI 角色本人的第一人称「我」书写**" in prompt
+    assert "fact 的「我」只能是 AI 角色本人" in prompt
+    assert "我的生日" in prompt
+    # The ambiguous construction is gone.
+    assert "对方称" not in prompt
+    # The chat tail keeps the configured name instead of the generic label.
+    assert "Mando：明天下班聚餐拍照给你看" in prompt
+    assert "当前日期时间：" in prompt
+    assert "## 待关注事项补建（第三任务）" in prompt
+
+
+@pytest.mark.asyncio
+async def test_batch_review_falls_back_to_chat_record_names_when_config_empty() -> (
+    None
+):
+    """v0.3.23: with no config, the real names in the chat record must be used.
+
+    The owner asked for exactly this: an empty config should fall back to the
+    nickname the conversation already carries rather than to vague labels.
+    """
+    from types import SimpleNamespace
+
+    from astrbot_plugin_emotion_state.main import EmotionStatePlugin
+    from astrbot_plugin_emotion_state.core.models import StateLedger
+
+    plugin = EmotionStatePlugin.__new__(EmotionStatePlugin)
+    plugin.config = {}
+    plugin._last_chat_rows = []
+
+    ledger = StateLedger(user_key="private:fallback")
+    ledger.message_watermark = 5
+    ledger.last_reviewed_watermark = 0
+
+    async def fake_get(user_key, settle=True):
+        return ledger
+
+    async def fake_mutate(user_key, action, mutation, audit_detail=None):
+        return ledger
+
+    plugin.service = SimpleNamespace(get=fake_get, mutate=fake_mutate)
+
+    async def fake_lookup(session_id, since="", limit=600):
+        return [
+            {"speaker": "user", "name": "Mando", "at": "", "text": "今天我生日"},
+            {"speaker": "assistant", "name": "小怡", "at": "", "text": "生日快乐"},
+        ]
+
+    plugin.context = SimpleNamespace(
+        _livingmemory_get_attention_history=fake_lookup
+    )
+
+    captured: dict[str, str] = {}
+
+    async def fake_complete(prompt, user_key, task=None, validate=None):
+        captured["prompt"] = prompt
+        return '{"event_observations": [], "attention_observations": []}', "fake"
+
+    plugin.gateway = SimpleNamespace(complete=fake_complete)
+
+    await plugin._run_batch_review("private:fallback")
+
+    prompt = captured["prompt"]
+    assert "用户本人叫「Mando」" in prompt
+    assert "AI 角色本人叫「小怡」" in prompt
+    assert "Mando：今天我生日" in prompt
+    assert "小怡：生日快乐" in prompt
+    # The rule still bans the vague labels even when the names came from chat.
+    assert "禁止写「用户」「他」「对方」" in prompt
+
+
+def test_plugin_version_matches_metadata() -> None:
+    """Keep the registered version and metadata.yaml in lockstep.
+
+    A release bumps both; this catches the case where one is edited and the
+    other is forgotten, which makes the published tag describe different code
+    than what AstrBot reports at runtime.
+    """
+    root = Path(__file__).resolve().parent.parent
+    metadata = (root / "metadata.yaml").read_text(encoding="utf-8")
+    declared = next(
+        line.split(":", 1)[1].strip()
+        for line in metadata.splitlines()
+        if line.startswith("version:")
+    )
+
+    main_source = (root / "main.py").read_text(encoding="utf-8")
+    # The version string handed to @register is the one AstrBot reports.
+    registered = re.search(r'@register\((?:[^)]*\n)*?\s*"([^"]+)",\n\s*"https', main_source)
+    assert registered is not None, "could not locate the @register version"
+    assert registered.group(1) == declared
+    assert declared == "v0.3.23"
+
+
+def test_guidance_prompt_pins_speaker_names() -> None:
+    """v0.3.23: the suggestion must not re-attribute an event to the wrong side.
+
+    A stale fact such as "用户记得今天是我生日" used to be copied straight into
+    can_say as "他记得我生日", flipping the meaning. The names and the meaning of
+    "我" now travel with the material.
+    """
+    from astrbot_plugin_emotion_state.core.models import InnerEvent, StateLedger
+
+    ledger = StateLedger(user_key="private:g")
+    ledger.events.append(
+        InnerEvent(
+            fact="登登今天过生日，要小怡晚上录语音祝福给他",
+            emotional_meaning="被惦记着一起过生日",
+            category="concrete",
+            lifecycle="intensified",
+            valence=0.8,
+            intensity=0.5,
+            confidence=0.8,
+        )
+    )
+
+    prompt = build_guidance_prompt(
+        ledger,
+        now=datetime(2026, 10, 4, 12, tzinfo=timezone.utc),
+        user_name="登登",
+        persona_name="小怡",
+    )
+
+    assert "用户本人叫「登登」" in prompt
+    assert "AI 角色本人叫「小怡」" in prompt
+    assert "你在写「我」时指的是 AI 角色本人" in prompt
+    assert "用户过生日" in prompt
+    assert "绝不能改成「我生日」「我记得」这种反过来的表述" in prompt
+    # The fact itself still travels with the prompt.
+    assert "登登今天过生日" in prompt
+
+
+def test_guidance_prompt_without_names_still_blocks_reversal() -> None:
+    """With no resolvable names the rule degrades, but never disappears.
+
+    Losing the anchor entirely is what let the model invent a fresh reading of
+    who "我" was, so the no-names branch still carries an explicit warning.
+    """
+    from astrbot_plugin_emotion_state.core.models import StateLedger
+
+    prompt = build_guidance_prompt(
+        StateLedger(user_key="private:g"),
+        now=datetime(2026, 10, 4, 12, tzinfo=timezone.utc),
+    )
+
+    assert "称呼与主客（必须与材料完全一致）" in prompt
+    assert "不要因为读到用户原话里的「我」就把它当成角色自己的事" in prompt

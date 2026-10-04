@@ -185,7 +185,7 @@ def _require_json_object(raw: str) -> dict[str, Any]:
     PLUGIN_NAME,
     "灵犀 · 内心世界",
     "私聊专用的连续情绪、心事、每日回顾与亲密状态系统。",
-    "v0.3.22",
+    "v0.3.23",
     "https://github.com/gongzhudeng/astrbot_plugin_emotion_state",
 )
 class EmotionStatePlugin(Star):
@@ -229,6 +229,9 @@ class EmotionStatePlugin(Star):
         self._review_batch_task: asyncio.Task[Any] | None = None
         self._guidance_task: asyncio.Task[Any] | None = None
         self._life_events_task: asyncio.Task[Any] | None = None
+        # Last raw chat window read from the LivingMemory handshake, kept so the
+        # review prompt can resolve the same speaker names the chat tail used.
+        self._last_chat_rows: list[Any] = []
         self.context._emotion_state_memory_summary = self._consume_memory_summary
         self.context._emotion_state_review_context = self._review_context
         self.context._emotion_state_schedule_context = self._schedule_context
@@ -1220,12 +1223,73 @@ class EmotionStatePlugin(Star):
         except Exception as exc:  # the safety net must never break chatting
             logger.debug("[EmotionState] local attention catch failed: %s", exc)
 
+    def _resolve_speaker_names(self, rows: list[Any]) -> tuple[str, str]:
+        """Resolve the two display names used across every generated section.
+
+        Priority is deliberate and shared by all three tasks (events, attention,
+        guidance) so a name can never mean one thing in one section and the
+        opposite in another:
+
+        1. Both configured names present -> use them verbatim.
+        2. Otherwise -> fall back to the real names carried by the chat record.
+
+        Returns ``(user_name, persona_name)``; either may be "" when unknown.
+        """
+        cfg_user = str(self.config.get("user_nickname", "") or "").strip()
+        cfg_persona = str(self.config.get("persona_name", "") or "").strip()
+        if cfg_user and cfg_persona:
+            return cfg_user, cfg_persona
+
+        real_user = real_persona = ""
+        for row in rows or []:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("name", "") or "").strip()
+            if not name or name in {"对方", "Bot"}:
+                continue
+            if str(row.get("speaker", "")) == "assistant":
+                real_persona = real_persona or name
+            else:
+                real_user = real_user or name
+        return (
+            cfg_user or real_user,
+            cfg_persona or real_persona,
+        )
+
+    def _naming_rule(self, user_name: str, persona_name: str) -> str:
+        """Build the shared naming rule.
+
+        The wording avoids the "对方称X / 你自己称Y" phrasing on purpose: that
+        construction reads as two opposite sentences in Chinese ("call the other
+        party X" vs "the other party calls you X"), which is exactly how the two
+        speakers got swapped once the fields were filled in. Naming the two
+        people directly as subjects leaves no room for interpretation.
+        """
+        parts = [
+            "**称呼与视角（所有字段一律遵守）**",
+            f"- 用户本人叫「{user_name}」，AI 角色本人叫「{persona_name}」。",
+            "- fact / content 字段里的「我」**永远只指 AI 角色本人**（也就是"
+            f"「{persona_name}」自己），叙述 AI 的动作、心情、承诺时一律用「我」。",
+            f"- 用户说的话里出现的「我」是他自己，转述时必须写成「{user_name}」，"
+            f"绝不能变成「我记得…」「我的生日」这种把用户的事安到 AI 头上的句子。",
+            f"- 提到用户时必须写具体名字「{user_name}」，禁止写「用户」「他」「对方」"
+            "这类泛称；提到 AI 自己时同理，必须能看出指的是角色本人。",
+            f"- 判断事实归属时以证据说话：谁说的、谁做的，就记在谁头上，不要因为"
+            "「今天是我生日」这类第一人称原话就默认生日属于 AI。",
+        ]
+        return "\n".join(parts) + "\n"
+
     async def _recent_chat_messages(self, user_key: str, limit: int = 24) -> str:
         """Read the recent private chat tail via the LivingMemory handshake.
 
         The core ConversationManager does not expose raw messages, so the
         batch review borrows LivingMemory's bounded read-only window (the
         same one the attention backfill has used in production).
+
+        Speaker prefixes keep the real display name reported by LivingMemory
+        (falling back to the generic label only when a name is unavailable).
+        Hardcoding "用户"/"角色" here used to strip the nicknames before the
+        model ever saw them, which left it guessing who "我" was.
         """
         lookup = getattr(self.context, "_livingmemory_get_attention_history", None)
         if not callable(lookup):
@@ -1237,15 +1301,21 @@ class EmotionStatePlugin(Star):
         history = lookup(user_key, since="", limit=limit)
         if asyncio.iscoroutine(history):
             history = await history
+        rows = [row for row in (history or []) if isinstance(row, dict)]
+        # Cached so the review prompt can resolve the same two names without
+        # re-reading the conversation; _run_batch_review runs right after this.
+        self._last_chat_rows = rows
+        user_name, persona_name = self._resolve_speaker_names(rows)
+        user_label = user_name or "用户"
+        persona_label = persona_name or "角色"
         lines: list[str] = []
-        for row in history or []:
-            if not isinstance(row, dict):
-                continue
+        for row in rows:
             text = str(row.get("text", "") or "").strip()
             if not text:
                 continue
-            speaker = "角色" if str(row.get("speaker", "")) == "assistant" else "用户"
-            lines.append(f"{speaker}：{text[:400]}")
+            is_assistant = str(row.get("speaker", "")) == "assistant"
+            label = persona_label if is_assistant else user_label
+            lines.append(f"{label}：{text[:400]}")
         return "\n".join(lines[-limit:])
 
     async def _review_batch_loop(self) -> None:
@@ -1322,18 +1392,14 @@ class EmotionStatePlugin(Star):
         # （v0.3.17 曾误放在 prompt= 之前，导致 batch review 每轮 UnboundLocalError）
         local_now = datetime.now().astimezone()
         weekday_cn = "周" + "一二三四五六日"[local_now.weekday()]
-        nickname = str(self.config.get("user_nickname", "") or "").strip()
-        persona_name = str(self.config.get("persona_name", "") or "").strip()
-        if nickname and persona_name:
-            naming_rule = (
-                f'称呼双方必须用具体名字：对方称"{nickname}"、'
-                f'你自己称"{persona_name}"'
-            )
-        else:
-            naming_rule = (
-                "称呼双方必须用对话前缀里的具体昵称"
-                "（对方用[昵称 的前缀名，你自己用人设名字）"
-            )
+        # v0.3.23：称呼规则改为三段共用。之前 naming_rule 只拼进第三任务的补建段，
+        # 任务一（心事）完全看不到，导致「用户记得今天是我生日」这类主客反转；
+        # 旧文案「对方称X、你自己称Y」在中文里还有两套相反读法，填了配置反而更容易对调。
+        # _recent_chat_messages 已按同一套优先级解析过名字，这里复用聊天记录里的
+        # 前缀名（无昵称时它已经降级为「用户：/角色：」），不再重复读配置。
+        _chat_rows = self._last_chat_rows or []
+        _user_name, _persona_name = self._resolve_speaker_names(_chat_rows)
+        naming_rule = self._naming_rule(_user_name, _persona_name)
         attention_section = "\n## 待关注事项核对（第二任务）\n"
         if attention_view:
             attention_section += (
@@ -1372,7 +1438,8 @@ class EmotionStatePlugin(Star):
             '- 用户自己正在进行或打算做的事（如"我再弄一个插件"、"我要做个语音模型"）\n'
             "- 用户要求后续继续跟进的话题\n"
             '有就输出 action="create"，字段：content（写明是谁的什么事，'
-            f"{naming_rule}，禁止\"用户\"\"角色\"泛称）、"
+            "称呼与主客归属严格遵守上面第一节的规则，"
+            f"用户写「{_user_name or '对方'}」、角色自称「我」，禁止泛称），"
             "kind（commitment/plan/remember/follow_up）、time_hint（保留原话里的相对词）、"
             "due_at（一律写按当前日期时间换算后的绝对 ISO 时间，不要照抄\"明天\"；"
             "凌晨0:00-4:59对方说的\"明天\"指当天白天；"
@@ -1387,6 +1454,7 @@ class EmotionStatePlugin(Star):
             f"当前日期时间：{local_now.strftime('%Y-%m-%d %H:%M')}（{weekday_cn}）。"
             "判断相对时间时以此为锚；凌晨0:00-4:59对方说的\"明天\"指当天白天。\n"
             "请只返回 JSON 对象，判断以下最近私聊记录，完成两个任务。\n"
+            f"{naming_rule}"
             "## 任务一：心事与情绪影响\n"
             "- 逐条考虑玩笑、转发、引用和前后文；讨论外部内容（视频、抖音、新闻、别人）"
             "不是攻击，最多产生一条轻度的瞬时情绪，不形成心事。\n"
@@ -1394,10 +1462,16 @@ class EmotionStatePlugin(Star):
             "（target=user）；不确定就跳过。\n"
             "- 正向事件（被夸、亲密互动、具体约定）也可以形成心事；对象如实标注"
             "（user/third_party/unknown）。\n"
-            "- 每项字段：action(create/intensify/ease/merge)、fact(第一人称、≤80字)、"
+            "- 每项字段：action(create/intensify/ease/merge)、"
+            "fact（**以 AI 角色本人的第一人称「我」书写**，≤80字，"
+            "叙述角色自己的动作、心情和承诺，用户一方必须写具体名字）、"
             "emotional_meaning、target、target_basis、evidence_quote、evidence_speaker、"
             "category(episodic/psychological/concrete)、valence(-1~1)、intensity(0~1)、"
             "confidence(0~1)。最多 3 项。\n"
+            "- **写 fact 前先确认「我」是谁**：fact 的「我」只能是 AI 角色本人。"
+            "用户原话里的「我」代表用户，必须改写成用户的名字；"
+            "凡是生日、纪念日、约定这类属于用户的事，绝不能写成「我的生日」"
+            "「我答应过」这类把用户的事安到角色头上的句子。\n"
             f"{attention_section}"
             "## 输出格式\n"
             '只返回 JSON 对象：{"event_observations": [...], '
@@ -1511,6 +1585,11 @@ class EmotionStatePlugin(Star):
             ledger = await self.service.get(user_key)
             options = self._injection_options()
             max_chars = max(20, self._int_config("guidance_max_chars", 200))
+            # v0.3.23: reuse the names the chat tail resolved so the suggestion
+            # cannot re-attribute an event to the wrong speaker.
+            guidance_user, guidance_persona = self._resolve_speaker_names(
+                self._last_chat_rows
+            )
             prompt = build_guidance_prompt(
                 ledger,
                 now=options.current_time(),
@@ -1522,6 +1601,8 @@ class EmotionStatePlugin(Star):
                     else ""
                 },
                 max_chars=max_chars,
+                user_name=guidance_user,
+                persona_name=guidance_persona,
             )
             response, provider_id = await self.gateway.complete(
                 prompt,

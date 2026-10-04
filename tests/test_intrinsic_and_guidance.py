@@ -1332,7 +1332,7 @@ def test_plugin_version_matches_metadata() -> None:
     registered = re.search(r'@register\((?:[^)]*\n)*?\s*"([^"]+)",\n\s*"https', main_source)
     assert registered is not None, "could not locate the @register version"
     assert registered.group(1) == declared
-    assert declared == "v0.3.23"
+    assert declared == "v0.3.24"
 
 
 def test_guidance_prompt_pins_speaker_names() -> None:
@@ -1388,3 +1388,80 @@ def test_guidance_prompt_without_names_still_blocks_reversal() -> None:
 
     assert "称呼与主客（必须与材料完全一致）" in prompt
     assert "不要因为读到用户原话里的「我」就把它当成角色自己的事" in prompt
+
+
+@pytest.mark.asyncio
+async def test_review_prompt_separates_doing_from_done() -> None:
+    """v0.3.24 regression: an in-progress action must not close its own item.
+
+    Production case: two items due that evening (a video, a dinner) were closed
+    by the 11:34 review because the role had said it was already ordering
+    ("我去看中午点什么好吃的", "外卖都挑好了") and had sent unrelated videos
+    earlier. The rule that blocks promises did not cover "currently doing", and
+    nothing stopped a similar event from standing in as proof.
+    """
+    from types import SimpleNamespace
+
+    from astrbot_plugin_emotion_state.core.models import AttentionItem, StateLedger
+    from astrbot_plugin_emotion_state.main import EmotionStatePlugin
+
+    plugin = EmotionStatePlugin.__new__(EmotionStatePlugin)
+    plugin.config = {"user_nickname": "登登", "persona_name": "小怡"}
+    plugin._last_chat_rows = []
+
+    ledger = StateLedger(user_key="private:doing")
+    ledger.message_watermark = 9
+    ledger.last_reviewed_watermark = 0
+    ledger.attention_items.append(
+        AttentionItem(
+            id="item-video",
+            content="2026年10月4日晚上我要拍白丝视频给他当生日礼物",
+            kind="commitment",
+            status="open",
+            explicit=True,
+            confidence=0.9,
+            created_at=datetime(2026, 10, 4, 2, tzinfo=timezone.utc).isoformat(),
+            due_at=datetime(2026, 10, 4, 15, tzinfo=timezone.utc).isoformat(),
+        )
+    )
+
+    async def fake_get(user_key, settle=True):
+        return ledger
+
+    async def fake_mutate(user_key, action, mutation, audit_detail=None):
+        return ledger
+
+    plugin.service = SimpleNamespace(get=fake_get, mutate=fake_mutate)
+
+    async def fake_lookup(session_id, since="", limit=600):
+        return [
+            {"speaker": "assistant", "name": "小怡", "at": "", "text": "我去看中午点什么"},
+            {"speaker": "user", "name": "登登", "at": "", "text": "晚上给我拍视频"},
+        ]
+
+    plugin.context = SimpleNamespace(
+        _livingmemory_get_attention_history=fake_lookup
+    )
+
+    captured: dict[str, str] = {}
+
+    async def fake_complete(prompt, user_key, task=None, validate=None):
+        captured["prompt"] = prompt
+        return '{"event_observations": [], "attention_observations": []}', "fake"
+
+    plugin.gateway = SimpleNamespace(complete=fake_complete)
+
+    await plugin._run_batch_review("private:doing")
+
+    prompt = captured["prompt"]
+    # "Currently doing" is a process state, not a finished action.
+    assert "**「正在做」和「做完了」要分清**" in prompt
+    assert "只是过程或打算，事项仍在进行中" in prompt
+    assert "一律**跳过该事项**" in prompt
+    # A different but similar event cannot stand in as proof for this one.
+    assert "**注意：完成必须是这件事本身的实迹，不能拿别的事情顶替**" in prompt
+    assert "同一件事的实迹只有一个" in prompt
+    # The pre-existing promise rule must survive alongside the new one.
+    assert "**承诺与预告一律不算完成证据**" in prompt
+    # And the item under review really is present in the prompt.
+    assert "晚上我要拍白丝视频给他当生日礼物" in prompt

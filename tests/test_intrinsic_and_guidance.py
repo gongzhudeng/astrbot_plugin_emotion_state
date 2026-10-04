@@ -1332,7 +1332,7 @@ def test_plugin_version_matches_metadata() -> None:
     registered = re.search(r'@register\((?:[^)]*\n)*?\s*"([^"]+)",\n\s*"https', main_source)
     assert registered is not None, "could not locate the @register version"
     assert registered.group(1) == declared
-    assert declared == "v0.3.25"
+    assert declared == "v0.3.26"
 
 
 def test_guidance_prompt_pins_speaker_names() -> None:
@@ -1461,6 +1461,9 @@ async def test_review_prompt_separates_doing_from_done() -> None:
     # A different but similar event cannot stand in as proof for this one.
     assert "**注意：完成必须是这件事本身的实迹，不能拿别的事情顶替**" in prompt
     assert "同一件事的实迹只有一个" in prompt
+    # v0.3.26: routine same-kind actions are not the promised one.
+    assert "**日常同款动作 ≠ 约定本身**" in prompt
+    assert "不是约定中的那一次" in prompt
     # The pre-existing promise rule must survive alongside the new one.
     assert "**承诺与预告一律不算完成证据**" in prompt
     # And the item under review really is present in the prompt.

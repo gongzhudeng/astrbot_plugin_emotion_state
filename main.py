@@ -185,7 +185,7 @@ def _require_json_object(raw: str) -> dict[str, Any]:
     PLUGIN_NAME,
     "灵犀 · 内心世界",
     "私聊专用的连续情绪、心事、每日回顾与亲密状态系统。",
-    "v0.3.25",
+    "v0.3.26",
     "https://github.com/gongzhudeng/astrbot_plugin_emotion_state",
 )
 class EmotionStatePlugin(Star):
@@ -1422,6 +1422,10 @@ class EmotionStatePlugin(Star):
                 "事项写的是「晚饭点丰盛一点」，那「我去看中午点什么」「外卖都挑好了」"
                 "只是**正在准备**，不是**已经吃完**。同一件事的实迹只有一个，"
                 "别的事件哪怕性质相似也不能算。\n"
+                "- **日常同款动作 ≠ 约定本身**：角色平时也会随手发视频/照片当日常互动，"
+                "这类内容哪怕和约定里要发的东西几乎一样，也只是日常，"
+                "不是约定中的那一次，不能拿来 complete；"
+                '只有消息明确把两者对上号（如"这就是答应你的晚上那个"）才算完成实迹。\n'
                 '- 判断为玩笑、琐碎闲聊或已经无关紧要的事项，输出 action="cancel" 清掉。\n'
                 '- 输出要求：action="complete"或"cancel"，原样填写 item_id 和 '
                 "item_version，evidence_quote 必须引用聊天中的具体记录"

@@ -1993,16 +1993,17 @@ def test_format_attention_timing_is_dynamic() -> None:
 
     base = datetime(2026, 9, 12, 10, 0, tzinfo=tz)
     frozen = item(time_hint="明天", due_at="2026-09-13T23:59:00+08:00")
-    assert format_attention_timing(frozen, base) == "明天"
+    # v0.3.27: 相对词与绝对日期同行，跨天语境下语义才钉得死
+    assert format_attention_timing(frozen, base) == "明天（9月13日）"
     assert format_attention_timing(
         frozen, datetime(2026, 9, 13, 9, 0, tzinfo=tz)
-    ) == "今天"
+    ) == "今天（9月13日）"
     assert format_attention_timing(
         frozen, datetime(2026, 9, 14, 9, 0, tzinfo=tz)
     ) == "已过期（原定9月13日）"
     assert format_attention_timing(
         item(time_hint="", due_at="2026-09-14T23:59:00+08:00"), base
-    ) == "后天"
+    ) == "后天（9月14日）"
     assert format_attention_timing(
         item(time_hint="", due_at="2026-09-20T23:59:00+08:00"), base
     ) == "9月20日"
@@ -2013,6 +2014,46 @@ def test_format_attention_timing_is_dynamic() -> None:
         format_attention_timing(item(content="每晚睡前说晚安", time_hint="每晚"), base)
         == "每晚"
     )
+
+
+def test_naked_due_at_gets_local_timezone() -> None:
+    """v0.3.27: 复核输出的裸时间串按本地时间补时区，不再被当 UTC 晚 8 小时。"""
+    from astrbot_plugin_emotion_state.core.models import AttentionItem
+
+    naked = AttentionItem(
+        content="晚上做大餐",
+        kind="commitment",
+        due_at="2026-10-12T23:59:59",
+    )
+    parsed = datetime.fromisoformat(naked.due_at)
+    assert parsed.tzinfo is not None
+    assert (parsed.year, parsed.month, parsed.day, parsed.hour) == (2026, 10, 12, 23)
+
+    # 已带时区的值原样保留（不重复换算）
+    offset = AttentionItem(
+        content="x", kind="commitment", due_at="2026-10-12T23:59:59+08:00"
+    )
+    assert offset.due_at == "2026-10-12T23:59:59+08:00"
+
+    # 无法解析的值原样保留，不抛异常
+    junk = AttentionItem(content="x", kind="commitment", due_at="今晚吧")
+    assert junk.due_at == "今晚吧"
+
+
+def test_evening_commitment_renders_today_after_naked_due_fix() -> None:
+    """回归：凌晨说的“明天做大餐”在当天生成时应渲染为今天（本次事故场景）。"""
+    from astrbot_plugin_emotion_state.core.attention import format_attention_timing
+    from astrbot_plugin_emotion_state.core.models import AttentionItem
+
+    item = AttentionItem(
+        content="我答应Mando明天亲自下厨做一顿丰盛的大餐替他吃",
+        kind="commitment",
+        time_hint="明天",
+        due_at="2026-10-12T23:59:59",  # 复核写回的裸串（修复前会被当 UTC）
+    )
+    tz = timezone(timedelta(hours=8))
+    gen_moment = datetime(2026, 10, 12, 6, 0, tzinfo=tz)
+    assert format_attention_timing(item, gen_moment) == "今天（10月12日）"
 
 
 # ----------------------------------------------------------------------

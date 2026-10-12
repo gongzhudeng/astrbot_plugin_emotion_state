@@ -13,6 +13,7 @@ from .models import (
     EventTrace,
     StateLedger,
     iso_now,
+    normalize_due_at,
     parse_time,
     utc_now,
 )
@@ -207,6 +208,11 @@ def format_attention_timing(item: AttentionItem, now: datetime | None = None) ->
     Stored time_hint words ("明天") are frozen at creation time; deriving the
     word from due_at at display time keeps "明天" turning into "今天" once the
     day actually arrives. Falls back to time_hint when no due time exists.
+
+    v0.3.27: relative words travel together with the absolute date
+    ("今天（10月12日）") — chat transcripts mix several "明天"s that point at
+    different days, so the date pins the meaning down even when surrounding
+    text is ambiguous.
     """
     if _ONGOING_ATTENTION_CUES.search(f"{item.time_hint} {item.content}"):
         return item.time_hint  # 进行性提示（每晚/每天…）原样保留
@@ -221,12 +227,13 @@ def format_attention_timing(item: AttentionItem, now: datetime | None = None) ->
     days = (due_dt.date() - anchor.date()).days
     if days < 0:
         return f"已过期（原定{due_dt.month}月{due_dt.day}日）"
+    date_suffix = f"（{due_dt.month}月{due_dt.day}日）"
     if days == 0:
-        return "今天"
+        return f"今天{date_suffix}"
     if days == 1:
-        return "明天"
+        return f"明天{date_suffix}"
     if days == 2:
-        return "后天"
+        return f"后天{date_suffix}"
     return f"{due_dt.month}月{due_dt.day}日"
 
 
@@ -641,7 +648,7 @@ def apply_attention_observation(
                     current.content
                 )
             current.time_hint = observation.time_hint or current.time_hint
-            current.due_at = (
+            current.due_at = normalize_due_at(
                 observation.due_at
                 or current.due_at
                 or resolve_due_at(current.time_hint)

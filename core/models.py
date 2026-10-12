@@ -55,6 +55,27 @@ def parse_time(value: str | None) -> datetime:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
+def normalize_due_at(value: str | None) -> str:
+    """Attach the local timezone to naked ISO datetimes (v0.3.27).
+
+    Review LLMs sometimes emit ``2026-10-12T23:59:59`` without an offset;
+    :func:`parse_time` would then treat it as UTC and shift it eight hours
+    ahead, rendering "tonight" as "tomorrow". The model means local
+    wall-clock time, so naked strings get the local timezone attached before
+    the value is stored. Already-offset or unparsable values pass through.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(text)
+    except (TypeError, ValueError):
+        return text[:64]
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=datetime.now().astimezone().tzinfo)
+    return parsed.isoformat()[:64]
+
+
 @dataclass(slots=True)
 class EventTrace:
     at: str
@@ -299,7 +320,7 @@ class AttentionItem:
             self.status = "open"
         self.actor = str(self.actor or "both").strip()[:40]
         self.time_hint = str(self.time_hint or "").strip()[:80]
-        self.due_at = str(self.due_at or "").strip()[:64]
+        self.due_at = normalize_due_at(self.due_at)
         self.evidence_speaker = str(self.evidence_speaker or "").strip().lower()[:24]
         self.confidence = clamp(self.confidence)
         self.version = max(1, int(self.version))
@@ -600,7 +621,7 @@ class AttentionObservation:
         self.content = str(self.content or "").strip()[:240]
         self.actor = str(self.actor or "both").strip()[:40]
         self.time_hint = str(self.time_hint or "").strip()[:80]
-        self.due_at = str(self.due_at or "").strip()[:64]
+        self.due_at = normalize_due_at(self.due_at)
         self.confidence = clamp(self.confidence)
         self.item_id = str(self.item_id or "").strip()[:80]
         self.evidence_quote = str(self.evidence_quote or "").strip()[:240]

@@ -38,6 +38,7 @@ class LedgerStore:
         self.ledger_dir = self.data_dir / "ledgers"
         self.backup_dir = self.data_dir / "backups"
         self.audit_file = self.data_dir / "audit.jsonl"
+        self.events_archive_file = self.data_dir / "events_archive.jsonl"
         self.ledger_dir.mkdir(parents=True, exist_ok=True)
         self.backup_dir.mkdir(parents=True, exist_ok=True)
 
@@ -138,3 +139,30 @@ class LedgerStore:
         }
         with self.audit_file.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(_json_safe(record), ensure_ascii=False) + "\n")
+
+    def append_events_archive(
+        self, user_key: str, events: list[dict[str, Any]]
+    ) -> None:
+        """Append retired events to the long-term JSONL archive.
+
+        Rows are written and fsynced before the caller rewrites the ledger, so
+        an interrupted prune can duplicate archive rows but never lose them.
+        """
+        if not events:
+            return
+        token = self.user_token(user_key)
+        with self.events_archive_file.open("a", encoding="utf-8") as handle:
+            for payload in events:
+                record = {
+                    "at": iso_now(),
+                    "user_token": token,
+                    "event": _json_safe(payload),
+                }
+                handle.write(
+                    json.dumps(
+                        record, ensure_ascii=False, separators=(",", ":")
+                    )
+                    + "\n"
+                )
+            handle.flush()
+            os.fsync(handle.fileno())

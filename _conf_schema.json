@@ -91,6 +91,17 @@
     },
     "default": 8
   },
+  "event_retention_days": {
+    "description": "已归档事件保留天数（自动瘦身）",
+    "hint": "超过该天数的已归档事件会移入 events_archive.jsonl，主账本保持精简，情绪、注入和日记行为不变。填 0 关闭自动瘦身。",
+    "type": "float",
+    "slider": {
+      "min": 0,
+      "max": 90,
+      "step": 1
+    },
+    "default": 14.0
+  },
   "decay_half_life_hours": {
     "description": "心事自然淡化半衰期（小时）",
     "type": "float",

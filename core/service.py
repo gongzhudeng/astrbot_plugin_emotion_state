@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from .attention import (
@@ -41,6 +41,21 @@ from .settlement import (
     settle_summary_mood,
 )
 from .storage import LedgerStore
+
+
+def _event_settled_at(event) -> datetime | None:
+    """Best-effort timestamp used to decide when an archived event is stale."""
+    for raw in (
+        getattr(event, "updated_at", ""),
+        getattr(event, "last_stimulated_at", ""),
+        getattr(event, "created_at", ""),
+    ):
+        try:
+            parsed = datetime.fromisoformat(str(raw))
+        except (TypeError, ValueError):
+            continue
+        return parsed if parsed.tzinfo else parsed.astimezone()
+    return None
 
 
 class EmotionStateService:
@@ -531,6 +546,54 @@ class EmotionStateService:
                 )
             await self._append_expiry_audit(user_key, ledger, expired_attention_ids)
             return ledger
+
+    async def prune_archived_events(self, user_key: str, keep_days: float) -> int:
+        """Retire archived events older than ``keep_days`` into the JSONL archive.
+
+        Only ``archived`` rows are retired. Every live lifecycle (active,
+        intensified, candidate, easing, dormant, ...) stays in the hot ledger,
+        so mood derivation, prompt injection and review context are unchanged.
+        """
+        days = float(keep_days)
+        if days <= 0:
+            return 0
+        cutoff = datetime.now().astimezone() - timedelta(days=days)
+        async with self._lock_for(user_key):
+            ledger = await asyncio.to_thread(self.store.load, user_key)
+            retired = []
+            for event in ledger.events:
+                if event.lifecycle != "archived":
+                    continue
+                settled = _event_settled_at(event)
+                if settled is None or settled >= cutoff:
+                    continue
+                retired.append(event)
+            if not retired:
+                return 0
+
+            retired_ids = {event.id for event in retired}
+            await asyncio.to_thread(
+                self.store.append_events_archive,
+                user_key,
+                [event.to_dict() for event in retired],
+            )
+            updated = StateLedger.from_dict(ledger.to_dict(), user_key=user_key)
+            updated.events = [
+                event for event in updated.events if event.id not in retired_ids
+            ]
+            updated.updated_at = datetime.now().astimezone().isoformat()
+            await asyncio.to_thread(self.store.save, updated)
+            await asyncio.to_thread(
+                self.store.append_audit,
+                user_key,
+                "archive_old_events",
+                {
+                    "count": len(retired),
+                    "keep_days": days,
+                    "state_version": updated.state_version,
+                },
+            )
+            return len(retired)
 
     async def delete_item(
         self,

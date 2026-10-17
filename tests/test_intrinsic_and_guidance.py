@@ -262,6 +262,39 @@ def test_night_missing_event_created_once_per_night() -> None:
     assert again is None
 
 
+def test_night_missing_not_recreated_after_capacity_archive() -> None:
+    """Regression: an archived copy must still count as 'already emitted today'.
+
+    The capacity governor keeps only a few active events, so it archives the
+    synthetic missing event almost immediately. Treating archived copies as
+    absent made every get() append a new duplicate (hundreds per day).
+    """
+    now = datetime.now(timezone.utc).astimezone()
+    night_hour = next(h for h in (22, 23, 0, 1))
+    night_now = now.replace(hour=night_hour)
+    ledger = StateLedger(user_key="private:missing-archived")
+    ledger.last_user_message_ts = (night_now - timedelta(hours=3)).timestamp()
+    params = IntrinsicParams(
+        night_hours=NIGHT,
+        night_missing_after_hours=2.0,
+        sensitivity=SensitivityParams(),
+    )
+    observation = maybe_night_missing_observation(ledger, night_now, params)
+    assert observation is not None
+    updated, applied, _ = apply_observation(ledger, observation)
+    assert applied
+    assert updated.events[0].fingerprint.startswith("night_missing:")
+
+    # Simulate the capacity governor archiving it.
+    updated.events[0].lifecycle = "archived"
+    updated.events[0].intensity = 0.1
+
+    assert maybe_night_missing_observation(updated, night_now, params) is None
+    assert sum(
+        1 for event in updated.events if event.source == "night_missing"
+    ) == 1
+
+
 def test_night_missing_requires_quiet_hours_and_night() -> None:
     now = datetime.now(timezone.utc).astimezone()
     params = IntrinsicParams(
@@ -1332,7 +1365,7 @@ def test_plugin_version_matches_metadata() -> None:
     registered = re.search(r'@register\((?:[^)]*\n)*?\s*"([^"]+)",\n\s*"https', main_source)
     assert registered is not None, "could not locate the @register version"
     assert registered.group(1) == declared
-    assert declared == "v0.3.27"
+    assert declared == "v0.3.28"
 
 
 def test_guidance_prompt_pins_speaker_names() -> None:

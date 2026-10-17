@@ -185,7 +185,7 @@ def _require_json_object(raw: str) -> dict[str, Any]:
     PLUGIN_NAME,
     "灵犀 · 内心世界",
     "私聊专用的连续情绪、心事、每日回顾与亲密状态系统。",
-    "v0.3.27",
+    "v0.3.28",
     "https://github.com/gongzhudeng/astrbot_plugin_emotion_state",
 )
 class EmotionStatePlugin(Star):
@@ -434,6 +434,7 @@ class EmotionStatePlugin(Star):
         self._review_batch_task = asyncio.create_task(self._review_batch_loop())
         self._guidance_task = asyncio.create_task(self._guidance_loop())
         self._life_events_task = asyncio.create_task(self._life_events_loop())
+        self._maintenance_task = asyncio.create_task(self._maintenance_loop())
 
     async def terminate(self) -> None:
         if (
@@ -468,6 +469,7 @@ class EmotionStatePlugin(Star):
             "_guidance_task",
             "_life_events_task",
             "_attention_backfill_task",
+            "_maintenance_task",
         ):
             task = getattr(self, name, None)
             if task:
@@ -2563,6 +2565,36 @@ class EmotionStatePlugin(Star):
             except Exception as exc:
                 logger.error("[EmotionState] settlement loop failed: %s", exc)
                 await asyncio.sleep(60)
+
+    async def _maintenance_loop(self) -> None:
+        """Retire stale archived events so the hot ledger stays small."""
+        keep_days = self._float_config("event_retention_days", 14.0)
+        if keep_days > 0:
+            logger.info(
+                "[EmotionState] 自动瘦身已启用：已归档事件保留 %.0f 天", keep_days
+            )
+        else:
+            logger.info("[EmotionState] 自动瘦身已关闭（event_retention_days=0）")
+        while True:
+            try:
+                keep_days = self._float_config("event_retention_days", 14.0)
+                if keep_days > 0:
+                    for user_key in await asyncio.to_thread(self.store.user_keys):
+                        removed = await self.service.prune_archived_events(
+                            user_key, keep_days
+                        )
+                        if removed:
+                            logger.info(
+                                "[EmotionState] 自动瘦身: %s 移出 %s 条已归档事件（保留 %.0f 天）",
+                                user_key,
+                                removed,
+                                keep_days,
+                            )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.error("[EmotionState] 自动瘦身失败: %s", exc)
+            await asyncio.sleep(6 * 3600)
 
     @staticmethod
     def _set_logical_day(ledger: StateLedger, value: str) -> StateLedger:

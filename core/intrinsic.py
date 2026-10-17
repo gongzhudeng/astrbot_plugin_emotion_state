@@ -198,10 +198,11 @@ def maybe_night_missing_observation(
     if quiet_hours < threshold:
         return None
     fingerprint = f"night_missing:{now.astimezone().date().isoformat()}"
-    if any(
-        event.fingerprint == fingerprint and event.lifecycle != "archived"
-        for event in ledger.events
-    ):
+    # Exactly one synthetic missing event per local day, archived or not.
+    # The capacity governor only keeps a handful of active events, so the
+    # previous "not archived" guard saw an archived copy as missing and created
+    # a fresh one on every get() -> hundreds of duplicates per day.
+    if any(event.fingerprint == fingerprint for event in ledger.events):
         return None
     return EventObservation(
         action="create",

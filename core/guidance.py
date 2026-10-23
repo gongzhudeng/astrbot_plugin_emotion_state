@@ -66,12 +66,23 @@ def time_band(now: datetime) -> str:
     return "凌晨"
 
 
+# 凌晨语感：和 attention.py 用同一个界（0:00-4:59 算"还没睡的那一天"）。
+# 熬夜聊到 23:50、0:30 的事，人心里都还是"今晚"，日历翻页不该改变说法。
+NIGHT_CUTOFF_HOUR = 5
+# 只在这个窗口内做"今晚"归一：超过 8 小时就真的是昨天白天了。
+NIGHT_CARRYOVER_HOURS = 8.0
+
+
 def relative_when(now: datetime, raw: Any) -> str:
     """Human-readable relative label for an event timestamp.
 
     The guidance model gets no clock of its own: without this label it cannot
     tell "yesterday noon" from "today noon" and blurs past events into the
     current moment. Returns "" when the timestamp is missing or unparseable.
+
+    跨零点不翻页：当前仍在凌晨（< NIGHT_CUTOFF_HOUR）且事件发生在此前
+    NIGHT_CARRYOVER_HOURS 小时内时，标签一律用「今晚」，避免把刚发生的事
+    说成「昨晚」。
     """
     if isinstance(raw, datetime):
         try:
@@ -88,15 +99,20 @@ def relative_when(now: datetime, raw: Any) -> str:
             moment = datetime.fromisoformat(text).astimezone()
         except (TypeError, ValueError, OSError):
             return ""
-    days = (now.astimezone().date() - moment.date()).days
-    if days == 0:
-        prefix = "今天"
-    elif days == 1:
-        prefix = "昨天"
-    elif 1 < days < 7:
-        prefix = f"{days}天前"
+    now_local = now.astimezone()
+    delta_hours = (now_local - moment).total_seconds() / 3600.0
+    if now_local.hour < NIGHT_CUTOFF_HOUR and 0 <= delta_hours < NIGHT_CARRYOVER_HOURS:
+        prefix = "今晚"
     else:
-        prefix = f"{moment.month}月{moment.day}日"
+        days = (now_local.date() - moment.date()).days
+        if days == 0:
+            prefix = "今天"
+        elif days == 1:
+            prefix = "昨天"
+        elif 1 < days < 7:
+            prefix = f"{days}天前"
+        else:
+            prefix = f"{moment.month}月{moment.day}日"
     return f"{prefix} {moment.strftime('%H:%M')}（{time_band(moment)}）"
 
 
@@ -270,6 +286,8 @@ def build_guidance_prompt(
         "禁止用“事件1”“事件3”“之前那件事”这类编号或指代——读建议的人看不到完整的事件清单。"
         "\n- 每件事的发生时间以材料里的 when 为准，表述时写明（如“昨天中午”），"
         "不得把早前发生的事说成今天或刚刚发生。"
+        "\n- 但材料里写「今晚」的事就是今晚：熬着夜还没睡，跨了零点也还算今晚，"
+        "照说今晚，不许改口成「昨晚」。"
         + naming_line
         + style_line
         + f"材料：{json.dumps(payload, ensure_ascii=False)}"

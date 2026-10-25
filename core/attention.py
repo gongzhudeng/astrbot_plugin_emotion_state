@@ -23,7 +23,21 @@ _TERMINAL_STATUSES = {"completed", "cancelled", "superseded", "archived"}
 # this many hours away, a model-suggested ``complete`` cannot be trusted
 # ("晚上拍视频" closed at 13:21, "晚饭" closed at 15:04). Code-level gate,
 # independent of prompt discipline; 0 disables the guard entirely.
+#
+# v0.3.30: the gate now also requires the item to name a *period* that has not
+# arrived yet. The old check looked only at the remaining time, so anything
+# whose due_at had been defaulted to "today 23:59" (takeout, a meal, a quick
+# clip) was refused all afternoon and could only be closed after 21:00 —
+# a hotpot that was eaten at 12:30 stayed open until 22:02 and the character
+# kept asking why the takeout had not been ordered. Periodless items are now
+# released; genuine "tonight/tomorrow" promises are still blocked.
 _PREMATURE_COMPLETE_GUARD_HOURS = 3.0
+# 只认"用户点明了时点"的词。故意不含「中午」：外卖类事项常写「今天中午点」，
+# 那是当天的事，不该拦到晚上。
+_EXPLICIT_PERIOD_CUES = re.compile(
+    r"下午|傍晚|晚上|今晚|今夜|夜里|睡前|凌晨|"
+    r"明晚|明早|明天|后天|大后天|周[一二三四五六日天]|下周|下个月"
+)
 # Sources trusted to mutate attention items. ``local_catch`` is the zero-cost
 # catch for explicit reminder wording and never depends on a model call.
 # ``webui`` is a human editing the dashboard by hand: highest trust.
@@ -522,6 +536,18 @@ def attention_observation_rejection(
     return None
 
 
+def _names_pending_period(item: AttentionItem) -> bool:
+    """Whether the item itself points at a period that has not arrived yet.
+
+    Only these items need the premature-completion gate: their deadline exists
+    because someone said "晚上" / "明天" / "周X", not because ``due_at`` was
+    filled with an end-of-day default. Items phrased "今天/待会/现在" are
+    ordinary same-day chores — once the chat shows them done, they are done.
+    """
+    text = f"{getattr(item, 'time_hint', '')} {getattr(item, 'content', '')}"
+    return bool(_EXPLICIT_PERIOD_CUES.search(text))
+
+
 def _premature_complete_rejection(
     item: AttentionItem,
     guard_hours: float,
@@ -532,6 +558,10 @@ def _premature_complete_rejection(
     afternoon: the reviewer can only see role-play phrasing, and every
     mis-close so far happened hours before due_at. Items without a
     parsable due_at, and due dates already in the past, are let through.
+
+    v0.3.30: an item whose wording names no period ("今天点外卖", "待会拍一段")
+    is released even when due_at is still hours away — its due_at is only the
+    end-of-day default, not a promise about when the action may happen.
     """
     try:
         guard = float(guard_hours)
@@ -550,6 +580,8 @@ def _premature_complete_rejection(
     if remaining <= timedelta(0):
         return None
     if remaining > timedelta(hours=guard):
+        if not _names_pending_period(item):
+            return None
         return "premature_completion_before_due"
     return None
 

@@ -185,7 +185,7 @@ def _require_json_object(raw: str) -> dict[str, Any]:
     PLUGIN_NAME,
     "灵犀 · 内心世界",
     "私聊专用的连续情绪、心事、每日回顾与亲密状态系统。",
-    "v0.3.29",
+    "v0.3.30",
     "https://github.com/gongzhudeng/astrbot_plugin_emotion_state",
 )
 class EmotionStatePlugin(Star):
@@ -1468,6 +1468,10 @@ class EmotionStatePlugin(Star):
             'evidence_speaker="user"。\n'
             "- 不要重复清单里已有的事项；不要为纯闲聊、纯情绪抒发、"
             "或已经完全结束的过去事实建项。\n"
+            "- **当场就能做到的不建项**：现在发一段语音、拍一段视频、"
+            '再说一句、换个说法（如"再来一句完整的士兵台词"），'
+            "这一轮就能给出结果、对话一结束就不再需要跟进的，直接做，不要建项。"
+            "只有需要跨轮或跨时间的（明天/晚上/下次/等我到家/以后）才建。\n"
             "- 拿不准时倾向于建项，后续复核还会再判断它是否完成。最多补建 3 项。\n"
         )
         prompt = (

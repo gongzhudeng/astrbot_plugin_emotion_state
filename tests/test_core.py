@@ -2147,3 +2147,67 @@ def test_complete_guard_ignores_items_without_due_at() -> None:
 
     assert (applied, reason) == (True, "applied")
     assert updated.attention_items[0].status == "completed"
+
+
+# ----------------------------------------------------------------------
+# v0.3.30 守门只认"点明了还没到的时段"，不再按时长一刀切
+# ----------------------------------------------------------------------
+def test_complete_allowed_for_same_day_item_with_end_of_day_due() -> None:
+    """麻辣香锅回归：只写「今天」的事项，due 23:59 兜底也不许拦到晚上。
+
+    真实事故：11:42 建项、12:24 外卖已到、22:02 才被关闭，中间还反过来
+    追问用户"外卖怎么还没点"。原因是 due 剩余时间被当成了"还没到点"。
+    """
+    item = _guard_item(8.0)
+    item.time_hint = "今天"
+    item.content = "Mando答应今天中午给我点麻辣香锅，到了告诉我"
+    ledger = StateLedger(user_key="private:guard", attention_items=[item])
+
+    updated, applied, reason = apply_attention_observation(
+        ledger, _guard_observation(item)
+    )
+
+    assert (applied, reason) == (True, "applied")
+    assert updated.attention_items[0].status == "completed"
+
+
+def test_complete_allowed_for_immediate_item_even_with_far_due() -> None:
+    """「待会 / 现在」这类即时事项同样放行。"""
+    item = _guard_item(8.0)
+    item.time_hint = "待会"
+    item.content = "Mando说待会拍外卖照片给我看"
+    ledger = StateLedger(user_key="private:guard", attention_items=[item])
+
+    updated, applied, reason = apply_attention_observation(
+        ledger, _guard_observation(item)
+    )
+
+    assert (applied, reason) == (True, "applied")
+    assert updated.attention_items[0].status == "completed"
+
+
+def test_complete_still_blocked_for_tonight_promise() -> None:
+    """v0.3.25 的原意保留：说了「晚上」的事，白天关闭照样拦。"""
+    item = _guard_item(8.0)
+    item.time_hint = "晚上"
+    item.content = "我答应晚上给 Mando 拍白丝视频"
+    ledger = StateLedger(user_key="private:guard", attention_items=[item])
+
+    _, applied, reason = apply_attention_observation(ledger, _guard_observation(item))
+
+    assert (applied, reason) == (False, "premature_completion_before_due")
+    assert ledger.attention_items[0].status == "open"
+
+
+def test_complete_still_blocked_when_only_content_names_the_period() -> None:
+    """time_hint 缺失时看 content：当初「下午拍黑丝」的误判形状仍要拦住。"""
+    item = _guard_item(8.0)
+    item.time_hint = ""
+    item.content = "下午记得拍黑丝视频给我看"
+    ledger = StateLedger(user_key="private:guard", attention_items=[item])
+
+    _, applied, reason = apply_attention_observation(ledger, _guard_observation(item))
+
+    assert (applied, reason) == (False, "premature_completion_before_due")
+    assert ledger.attention_items[0].status == "open"
+

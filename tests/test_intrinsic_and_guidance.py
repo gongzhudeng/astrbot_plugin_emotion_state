@@ -1365,7 +1365,7 @@ def test_plugin_version_matches_metadata() -> None:
     registered = re.search(r'@register\((?:[^)]*\n)*?\s*"([^"]+)",\n\s*"https', main_source)
     assert registered is not None, "could not locate the @register version"
     assert registered.group(1) == declared
-    assert declared == "v0.3.30"
+    assert declared == "v0.3.31"
 
 
 def test_guidance_prompt_pins_speaker_names() -> None:

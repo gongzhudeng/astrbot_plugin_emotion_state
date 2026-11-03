@@ -61,6 +61,7 @@ _KIND_LABELS = {
     "plan": "计划",
     "remember": "需要记住",
     "follow_up": "待接续",
+    "care": "状态",
 }
 _STATUS_LABELS = {
     "proposed": "待确认",
@@ -107,6 +108,16 @@ def attention_kind_label(kind: str) -> str:
 
 def attention_status_label(status: str) -> str:
     return _STATUS_LABELS.get(str(status), str(status))
+
+
+# care（用户当下的身体/情绪状态）是短时事项：默认 24 小时后自然过期，
+# 免得"头晕"这种一次性的状态变成永久挂起。用户说好了会提前 complete。
+_CARE_DEFAULT_HOURS = 24.0
+
+
+def default_care_due(now: datetime | None = None) -> str:
+    moment = (now or utc_now()) + timedelta(hours=_CARE_DEFAULT_HOURS)
+    return moment.isoformat()
 
 
 def is_open_attention(item: AttentionItem) -> bool:
@@ -656,6 +667,10 @@ def apply_attention_observation(
             or attention_fingerprint(observation.content),
             evidence=[_trace(observation, "created", now)],
         )
+        # care 是一次性的状态关注：没写截止时间就默认 24 小时后过期，
+        # 免得"头晕"这类事项一直挂在清单里（无 due 的条目不会被自动归档）。
+        if item.kind == "care" and not item.due_at:
+            item.due_at = default_care_due()
         updated.attention_items.append(item)
     else:
         if current is None:
@@ -794,6 +809,14 @@ def select_attention_items(
     include_proposed: bool = False,
     now: datetime | None = None,
 ) -> list[AttentionItem]:
+    """Pick the items injected into the reply prompt.
+
+    v0.3.32: ``care`` items (the user's current physical / emotional state)
+    share the same ``limit`` slots as everything else, but rank above ordinary
+    items — "他说头晕" deserves attention before "周末看电影". Already-overdue
+    items still rank first: a promise you are late for must not be pushed out
+    by a fresh care item.
+    """
     current_time = now or utc_now()
     candidates = [
         item
@@ -812,11 +835,13 @@ def select_attention_items(
             return 0.0
 
     def score(item: AttentionItem) -> tuple[float, float, float, float, float, str]:
-        overdue = 1.0 if is_attention_overdue(item, current_time) else 0.0
+        overdue = is_attention_overdue(item, current_time)
+        # 0 = 已逾期，1 = care（用户当下的状态），2 = 其他
+        tier = 0.0 if overdue else (1.0 if item.kind == "care" else 2.0)
         open_status = 1.0 if item.status == "open" else 0.0
         explicit = 1.0 if item.explicit else 0.0
         return (
-            -overdue,
+            tier,
             -open_status,
             -explicit,
             -item.confidence,

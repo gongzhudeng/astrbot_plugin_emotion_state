@@ -185,7 +185,7 @@ def _require_json_object(raw: str) -> dict[str, Any]:
     PLUGIN_NAME,
     "灵犀 · 内心世界",
     "私聊专用的连续情绪、心事、每日回顾与亲密状态系统。",
-    "v0.3.31",
+    "v0.3.32",
     "https://github.com/gongzhudeng/astrbot_plugin_emotion_state",
 )
 class EmotionStatePlugin(Star):
@@ -269,6 +269,26 @@ class EmotionStatePlugin(Star):
 
     def _injection_rules_text(self) -> str:
         return str(self._config("emotion_state_rules_prompt", "") or "")
+
+    def _extra_attention_rules(self, section: str) -> str:
+        """Append user-written rules to the review prompt (v0.3.32).
+
+        Deliberately append-only: the rest of the prompt carries the JSON
+        contract and the field list, so replacing it wholesale would silently
+        break the pipeline whenever a line is edited wrong.
+        """
+        key = (
+            "attention_extra_create_rules"
+            if section == "create"
+            else "attention_extra_close_rules"
+        )
+        raw = str(self._config(key, "") or "").strip()
+        if not raw:
+            return ""
+        return (
+            "\n- **补充规则（用户自定义，与上面同主题冲突时以这里为准）**：\n"
+            f"{raw}\n"
+        )
 
     def _sensitivity(self) -> SensitivityParams:
         """Read the six emotional-sensitivity sliders from live configuration."""
@@ -1188,12 +1208,48 @@ class EmotionStatePlugin(Star):
                 return
             expected_version = updated.state_version
 
+    def _evidence_speaker_conflict(self, observation: AttentionObservation) -> bool:
+        """True when a "user" create is actually quoting the character's own line.
+
+        The reviewer sometimes files the bot's own words ("还没好呢，这破服务器
+        慢死了") as a user commitment. Only the conclusive case is rejected:
+        the quote is absent from every user message but present in an assistant
+        one. Quotes that match nowhere are left alone — the window may simply
+        be truncated, and silently dropping them would resurrect the old
+        "死活不建项" problem.
+        """
+        if observation.action != "create" or observation.evidence_speaker != "user":
+            return False
+        quote = normalize_attention_content(observation.evidence_quote)
+        if len(quote) < 6:
+            return False
+        rows = self._last_chat_rows or []
+        if not rows:
+            return False
+
+        def appears(speaker: str) -> bool:
+            for row in rows:
+                if str(row.get("speaker", "")) != speaker:
+                    continue
+                text = normalize_attention_content(str(row.get("text", "")))
+                if quote in text:
+                    return True
+            return False
+
+        return appears("assistant") and not appears("user")
+
     async def _apply_review_attention_items(self, user_key: str, payload: Any) -> None:
         """Apply attention settlements (and backfills) judged from the chat tail."""
         observations = self._parse_attention_observations(
             payload, source="attention_review"
         )
         for observation in observations[:8]:
+            if self._evidence_speaker_conflict(observation):
+                logger.debug(
+                    "[EmotionState] attention review skipped: evidence belongs to assistant (%s)",
+                    observation.content[:40],
+                )
+                continue
             _, applied, reason = await self.service.observe_attention(
                 user_key, observation
             )
@@ -1428,6 +1484,9 @@ class EmotionStatePlugin(Star):
                 "这类内容哪怕和约定里要发的东西几乎一样，也只是日常，"
                 "不是约定中的那一次，不能拿来 complete；"
                 '只有消息明确把两者对上号（如"这就是答应你的晚上那个"）才算完成实迹。\n'
+                '- **care（状态类）何时关闭**：用户说"好多了""不疼了""没事了"'
+                '"睡一觉好多了"就输出 action="complete"；用户只是转移话题、'
+                "后来又没再提，不要急着关，让它按 24 小时时效自然过期。\n"
                 '- 判断为玩笑、琐碎闲聊或已经无关紧要的事项，输出 action="cancel" 清掉。\n'
                 '- 输出要求：action="complete"或"cancel"，原样填写 item_id 和 '
                 "item_version，evidence_quote 必须引用聊天中的具体记录"
@@ -1446,6 +1505,7 @@ class EmotionStatePlugin(Star):
                 "- 能 complete 的只有已完成动作的实迹：照片/视频/语音已经出现在聊天里，"
                 "或聊天明确描述事情已经发生（如\"提前买了\"\"已经办好\"）；"
                 "拿不准就跳过该事项，等下次复核再判。\n"
+                f"{self._extra_attention_rules('close')}"
                 f"待办清单：{json.dumps(attention_view, ensure_ascii=False)}\n"
             )
         else:
@@ -1457,22 +1517,45 @@ class EmotionStatePlugin(Star):
             '- 双方约定或承诺（如"明天给你点奶茶"、"晚上拍给你看"、"我答应你……"）\n'
             '- 用户自己正在进行或打算做的事（如"我再弄一个插件"、"我要做个语音模型"）\n'
             "- 用户要求后续继续跟进的话题\n"
+            '- 用户当下的身体或情绪状态（只收真正需要关心的，见下）\n'
             '有就输出 action="create"，字段：content（写明是谁的什么事，'
             "称呼与主客归属严格遵守上面第一节的规则，"
             f"用户写「{_user_name or '对方'}」、角色自称「我」，禁止泛称），"
-            "kind（commitment/plan/remember/follow_up）、time_hint（保留原话里的相对词）、"
+            "kind（commitment/plan/remember/follow_up/care）、"
+            "time_hint（保留原话里的相对词）、"
             "due_at（一律写按当前日期时间换算后的绝对 ISO 时间，不要照抄\"明天\"；"
             "凌晨0:00-4:59对方说的\"明天\"指当天白天；"
-            "不确定一律留空，表示长期挂起）、"
+            "care 一律留空由系统给 24 小时；不确定一律留空，表示长期挂起）、"
             "confidence（≥0.70）、explicit=true、evidence_quote（逐字引用用户原话）、"
             'evidence_speaker="user"。\n'
+            "- **care（用户状态）只收真正需要关心的**：用户明确说自己身体不舒服"
+            "（头晕、肚子疼、胃疼、发烧、失眠、受伤、疼得厉害），"
+            "或遇到明确的情绪事件（被骂了、被领导批评、跟人吵架、很委屈、很难过、"
+            "焦虑到睡不着），才建 care；content 写清是什么状态、从什么时候开始。\n"
+            "- care 的**日常吐槽一律不建**：\"累死了\"\"困了\"\"好饿\"\"烦死了\""
+            "\"笑死\"\"上班好无聊\"这类口头感叹、夸张修辞、打招呼式的抱怨都不算；"
+            "只有用户在认真描述一个具体的、正在持续的不适或事件时才建。"
+            "这一类拿不准就不建。\n"
+            "- **以下不建项**：\n"
+            "  · 远期愿景——只说\"以后/下次/将来/有一天/等以后/哪天有空\"，"
+            "却没有任何具体时点或具体动作的（如\"以后带你去漫展\"\"下一站去海边\"），"
+            "属于画大饼，不建；但同一句里给了具体安排"
+            "（\"下周六去漫展，我到门口接你\"）就照常建。\n"
+            "  · 关系表态与情话——表达感情、承诺态度（\"我会一直陪着你\""
+            "\"以后有事互相说出来\"）不建，它们属于心事，不是待办。\n"
+            "  · 查询、复述、纠错——用户在问\"你能看见那个计划吗\"\"啥约定啊\"，不建。\n"
+            "- **别削过头**：具体的情色/亲密约定照常建（如\"晚上拍给你看\""
+            "\"明天穿那套\"），不要因为内容亲密就跳过；被排除的只有"
+            "\"没有时点的远期愿望\"和\"纯态度表达\"。\n"
             "- 不要重复清单里已有的事项；不要为纯闲聊、纯情绪抒发、"
             "或已经完全结束的过去事实建项。\n"
             "- **当场就能做到的不建项**：现在发一段语音、拍一段视频、"
             '再说一句、换个说法（如"再来一句完整的士兵台词"），'
             "这一轮就能给出结果、对话一结束就不再需要跟进的，直接做，不要建项。"
             "只有需要跨轮或跨时间的（明天/晚上/下次/等我到家/以后）才建。\n"
-            "- 拿不准时倾向于建项，后续复核还会再判断它是否完成。最多补建 3 项。\n"
+            "- 除上面明确排除的和 care 类之外，拿不准时倾向于建项，"
+            "后续复核还会再判断它是否完成。最多补建 3 项。\n"
+            f"{self._extra_attention_rules('create')}"
         )
         prompt = (
             f"当前日期时间：{local_now.strftime('%Y-%m-%d %H:%M')}（{weekday_cn}）。"
@@ -2508,7 +2591,8 @@ class EmotionStatePlugin(Star):
         if not attention_items:
             lines.append("- 暂无")
         lines.append(
-            f"本次模型提示词实际最多注入 {max_attention_items} 条，当前选中 {len(selected_ids)} 条："
+            f"本次模型提示词实际最多注入 {max_attention_items} 条"
+            f"（care 状态类优先占用同一名额），当前选中 {len(selected_ids)} 条："
         )
         lines.extend(f"- {item.content}" for item in selected_attention)
         if not selected_attention:
@@ -2894,7 +2978,7 @@ class EmotionStatePlugin(Star):
         if not content:
             return {"status": "error", "message": "内容不能为空"}
         kind = str(payload.get("kind", "follow_up")).strip().lower()
-        if kind not in {"commitment", "plan", "remember", "follow_up"}:
+        if kind not in {"commitment", "plan", "remember", "follow_up", "care"}:
             return {"status": "error", "message": "类型无效"}
         due_at = self._normalize_webui_due_at(payload.get("due_at"))
         if due_at is None:

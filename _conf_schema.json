@@ -677,5 +677,25 @@
       "step": 0.5
     },
     "default": 3.0
+  },
+  "attention_extra_create_rules": {
+    "description": "待关注事项 · 自定义建项规则（追加）",
+    "hint": "追加到「待关注事项补建」任务的最末尾，用自然语言写你想让她多建或少建什么（例如「我说身体不舒服时要建 care」）。留空表示不加。与内置规则冲突时以这里为准。",
+    "type": "string",
+    "max_length": 2000,
+    "obvious_hint": true,
+    "editor_mode": true,
+    "editor_language": "markdown",
+    "default": ""
+  },
+  "attention_extra_close_rules": {
+    "description": "待关注事项 · 自定义关闭规则（追加）",
+    "hint": "追加到「待关注事项核对」任务末尾，补充完成／取消的判断条件（例如「我说好多了就算完成」）。留空表示不加。与内置规则冲突时以这里为准。",
+    "type": "string",
+    "max_length": 2000,
+    "obvious_hint": true,
+    "editor_mode": true,
+    "editor_language": "markdown",
+    "default": ""
   }
 }

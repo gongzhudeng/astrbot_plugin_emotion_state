@@ -27,7 +27,7 @@ ObservationAction = Literal[
     "archive",
     "retain",
 ]
-AttentionKind = Literal["commitment", "plan", "remember", "follow_up"]
+AttentionKind = Literal["commitment", "plan", "remember", "follow_up", "care"]
 AttentionStatus = Literal[
     "proposed", "open", "completed", "cancelled", "superseded", "archived"
 ]
@@ -307,7 +307,7 @@ class AttentionItem:
 
     def __post_init__(self) -> None:
         self.content = self.content.strip()[:240]
-        if self.kind not in {"commitment", "plan", "remember", "follow_up"}:
+        if self.kind not in {"commitment", "plan", "remember", "follow_up", "care"}:
             self.kind = "follow_up"
         if self.status not in {
             "proposed",
@@ -607,7 +607,7 @@ class AttentionObservation:
 
     def __post_init__(self) -> None:
         self.action = str(self.action or "").strip().lower()
-        if self.kind not in {"commitment", "plan", "remember", "follow_up"}:
+        if self.kind not in {"commitment", "plan", "remember", "follow_up", "care"}:
             self.kind = "follow_up"
         if self.status not in {
             "proposed",

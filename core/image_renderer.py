@@ -133,6 +133,7 @@ class EmotionStateImageRenderer:
             "plan": "计划",
             "remember": "记住",
             "follow_up": "后续跟进",
+            "care": "状态",
         }.get(str(kind), "待关注")
 
     @staticmethod

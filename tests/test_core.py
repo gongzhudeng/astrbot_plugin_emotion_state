@@ -2211,3 +2211,63 @@ def test_complete_still_blocked_when_only_content_names_the_period() -> None:
     assert (applied, reason) == (False, "premature_completion_before_due")
     assert ledger.attention_items[0].status == "open"
 
+
+# ----------------------------------------------------------------------
+# v0.3.32 care（用户当下的身体/情绪状态）
+# ----------------------------------------------------------------------
+def test_care_item_keeps_kind_and_gets_default_due() -> None:
+    """care 是合法类型，且没写截止时间时自动补 24 小时时效。"""
+    observation = AttentionObservation(
+        action="create",
+        content="Mando说头晕，从中午开始",
+        kind="care",
+        status="open",
+        explicit=True,
+        confidence=0.86,
+        source="attention_review",
+        evidence_quote="我今天头晕得厉害，从中午开始的",
+        evidence_speaker="user",
+    )
+    ledger = StateLedger(user_key="private:care")
+
+    updated, applied, reason = apply_attention_observation(ledger, observation)
+
+    assert (applied, reason) == (True, "applied")
+    item = updated.attention_items[0]
+    assert item.kind == "care"
+    assert item.due_at, "care 必须自动带 24h 时效，否则会永久挂起"
+
+
+def test_care_outranks_ordinary_but_not_overdue() -> None:
+    """注入排序：已逾期 > care > 普通事项。"""
+    now = datetime(2026, 11, 3, 6, 0, tzinfo=timezone.utc)
+    care = AttentionItem(
+        content="Mando头晕",
+        kind="care",
+        status="open",
+        explicit=True,
+        confidence=0.80,
+        due_at=(now + timedelta(hours=20)).isoformat(),
+    )
+    ordinary = AttentionItem(
+        content="周末看电影",
+        kind="commitment",
+        status="open",
+        explicit=True,
+        confidence=0.95,
+        due_at=(now + timedelta(days=3)).isoformat(),
+    )
+    overdue = AttentionItem(
+        content="昨晚拍视频",
+        kind="commitment",
+        status="open",
+        explicit=True,
+        confidence=0.90,
+        due_at=(now - timedelta(hours=2)).isoformat(),
+    )
+
+    picked = select_attention_items([ordinary, care, overdue], 2, now=now)
+
+    assert [item.content for item in picked] == ["昨晚拍视频", "Mando头晕"]
+
+

@@ -241,6 +241,11 @@ def format_attention_timing(item: AttentionItem, now: datetime | None = None) ->
     """
     if _ONGOING_ATTENTION_CUES.search(f"{item.time_hint} {item.content}"):
         return item.time_hint  # 进行性提示（每晚/每天…）原样保留
+    # v0.3.33: care 的 due_at 是"什么时候过期"，不是"约定什么时候做"。
+    # 按剩余天数格式化成"明天"会让模型以为明天才需要关心，这里直接说进行中；
+    # 真过期了仍走下面的原逻辑（"已过期（原定X月X日）"）。
+    if item.kind == "care" and not is_attention_overdue(item, now):
+        return "进行中"
     due_text = item.due_at or resolve_due_at(item.time_hint, now)
     if not due_text:
         return item.time_hint

@@ -8,6 +8,7 @@ import pytest
 from astrbot_plugin_emotion_state.core import storage as storage_module
 from astrbot_plugin_emotion_state.core.attention import (
     apply_attention_observation,
+    format_attention_timing,
     is_attention_overdue,
     select_attention_items,
 )
@@ -2269,5 +2270,33 @@ def test_care_outranks_ordinary_but_not_overdue() -> None:
     picked = select_attention_items([ordinary, care, overdue], 2, now=now)
 
     assert [item.content for item in picked] == ["昨晚拍视频", "Mando头晕"]
+
+
+def test_care_timing_reads_as_ongoing() -> None:
+    """care 的 due 是过期时间，不能显示成「明天」，否则模型会以为明天才要关心。"""
+    now = datetime(2026, 11, 3, 6, 0, tzinfo=timezone.utc)
+    item = AttentionItem(
+        content="Mando被网友辱骂，心里难过",
+        kind="care",
+        status="open",
+        due_at=(now + timedelta(hours=20)).isoformat(),
+    )
+
+    assert format_attention_timing(item, now) == "进行中"
+
+
+def test_commitment_timing_still_counts_days() -> None:
+    """约定类文案不变：仍按 due 距今天数显示。"""
+    now = datetime(2026, 11, 3, 6, 0, tzinfo=timezone.utc)
+    item = AttentionItem(
+        content="晚上拍视频",
+        kind="commitment",
+        status="open",
+        time_hint="晚上",
+        due_at=(now + timedelta(hours=8)).isoformat(),
+    )
+
+    assert format_attention_timing(item, now).startswith("今天")
+
 
 

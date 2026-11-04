@@ -1,0 +1,10 @@
+feat: dynamic attention timing display, dawn semantics and naming rules
+
+- derive injected time word from absolute due_at so frozen hints like
+  tomorrow turn into today once the day arrives (injector / view / image)
+- dawn semantics (00:00-04:59): tomorrow means the current day's daytime
+  in both resolve_due_at and local catch rules
+- batch review prompt now carries current time, bans generic user/role
+  wording in content (configurable nicknames), requires absolute due_at
+  and rejects the original promise quote as completion evidence
+- new config keys: user_nickname / persona_name

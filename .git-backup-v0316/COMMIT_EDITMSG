@@ -1,0 +1,18 @@
+feat: dashboard injection view and manual attention editing
+
+The reply-suggestions card only showed the guidance block, and the
+attention list could only be archived, so there was no way to fix an
+item the model mis-recorded without touching data files by hand.
+
+- Rework the guidance card into an "actual injection" view: mood chips,
+  body stage, the exact events/attention items select_injected_* picks
+  (what the model really sees right now), and the expression guidance.
+  The state API now exposes selected_injection_events for it.
+- Attention items are editable from the dashboard: a dialog handles
+  create and update (content, kind, status, time hint, due date).
+  Create goes through observe_attention with a trusted "webui" source;
+  update goes through a dedicated mutate callback because the standard
+  update branch cannot clear an existing due_at with an empty value.
+- The webui source skips the anti-hallucination heuristics (past dates,
+  short-lived phrasing): a human typing in the dashboard is the
+  authority. Model-path guards are untouched.

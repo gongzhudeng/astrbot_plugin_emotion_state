@@ -1,0 +1,8 @@
+fix: assign naming_rule before first use in batch review prompt
+
+The naming/time-anchor block was inserted right before the prompt build
+but is already referenced by the attention_section build above it, so
+every batch review crashed with UnboundLocalError and background
+settlement (mood + attention items) silently stopped. Move the block
+ahead of attention_section and add an end-to-end regression test that
+runs _run_batch_review against stubs.

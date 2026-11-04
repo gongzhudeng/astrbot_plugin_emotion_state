@@ -1,7 +1,0 @@
-v0.3.19: tighten local attention catch (recall questions, shell clauses, config switches)
-
-- reject recall-style questions: 记不记得/记得不/记得吗/记得吧
-- reject 2nd-person recall (你还记得...) unless hard instruction present
-- reject question-tone endings and sub-6-char focus clauses
-- config switches: attention_local_catch_enabled / attention_expiry_grace_days
-- tests: 171 passed

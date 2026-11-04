@@ -15,3 +15,10 @@ temp/
 .idea/
 .vscode/
 *.log
+# 运行时数据与本地备份（不随插件发布）
+*.bak_*
+*.bak-*
+.git-backup*/
+.git_backup*/
+_local_git_backup*/
+_local_backups/

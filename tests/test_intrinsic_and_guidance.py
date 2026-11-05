@@ -522,6 +522,19 @@ def test_injection_omits_sections_at_zero_limits() -> None:
     assert "当前没有足够确定" not in prompt
     assert "仍需留意或接续的事项" not in prompt
     assert "当前没有仍需留意" not in prompt
+
+
+def test_empty_ledger_omits_placeholder_sentences() -> None:
+    """空账本不再声明「没有」——清单类段落空了就整段不出现。"""
+    ledger = StateLedger(user_key="private:empty")
+    prompt = inject_prompt("persona", ledger)
+    assert "当前仍有影响的事情" not in prompt
+    assert "当前没有足够确定" not in prompt
+    assert "仍需留意或接续的事项" not in prompt
+    assert "当前没有仍需留意" not in prompt
+    # 状态类段落不受影响：心境与身体反应照常出现。
+    assert "当前心境" in prompt or "整体" in prompt
+    assert "当前身体反应档位" in prompt
     assert "当前心境" in prompt
 
 

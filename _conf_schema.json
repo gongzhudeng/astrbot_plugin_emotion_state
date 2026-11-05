@@ -256,6 +256,24 @@
     "type": "float",
     "default": 8.0
   },
+  "cycle_enabled": {
+    "description": "生理期",
+    "hint": "按周期给身体状态：经期/经前会注入一句体感，日程生成也会读到。开始日用「/生理期 开始 2026-11-03」设置，未设置时完全不生效。",
+    "type": "bool",
+    "default": true
+  },
+  "cycle_length": {
+    "description": "周期长度（天）",
+    "hint": "21–35 之间会被采纳，超出按边界处理。只在设置开始日时写入。",
+    "type": "int",
+    "default": 28
+  },
+  "cycle_period_length": {
+    "description": "经期长度（天）",
+    "hint": "3–7 之间。决定前几天的身体描述。",
+    "type": "int",
+    "default": 5
+  },
   "daily_settlement_enabled": {
     "description": "启用每日自动结算",
     "hint": "到设定日界线后，关闭刚结束的逻辑日并生成新一天的起始心境。即使关闭模型日记，仍会执行本地确定性结算和本地回顾。",

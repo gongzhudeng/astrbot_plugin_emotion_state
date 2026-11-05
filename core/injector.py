@@ -157,6 +157,7 @@ def build_snapshot(
     max_attention_items: int = 2,
     *,
     options: InjectionOptions | None = None,
+    cycle_line: str = "",
 ) -> str:
     opts = options or InjectionOptions()
     selected = select_injected_events(ledger.events, max_events)
@@ -172,36 +173,30 @@ def build_snapshot(
             night_hours=opts.night_hours,
         ),
     ]
-    if max_events > 0:
-        if selected:
-            lines.append("当前仍有影响的事情：")
-            for event in selected:
-                fact = normalize_fact(event.fact, EVENT_FACT_INJECTION_CHARS)
-                meaning = normalize_fact(event.emotional_meaning, 140)
-                target_label = {
-                    "user": "当前聊天对象",
-                    "third_party": "第三方",
-                    "unknown": "对象未明确",
-                }.get(str(event.target).strip().lower(), "其他对象")
-                lines.append(f"- {fact}（对象：{target_label}；{meaning}）")
-        else:
-            lines.append("当前没有足够确定、需要特别带入的具体事情。")
-    if max_attention_items > 0:
-        if attention_items:
-            lines.append("仍需留意或接续的事项：")
-            for item in attention_items:
-                status = "待双方确认" if item.status == "proposed" else "仍待关注"
-                timing = format_attention_timing(item, now)
-                overdue = (
-                    "，时间已到但尚无完成证据" if is_attention_overdue(item) else ""
-                )
-                suffix = f"，时间提示：{timing}" if timing else ""
-                lines.append(
-                    f"- [{attention_kind_label(item.kind)}；{status}] "
-                    f"{normalize_fact(item.content, 180)}{suffix}{overdue}"
-                )
-        else:
-            lines.append("当前没有仍需留意或接续的事项。")
+    if max_events > 0 and selected:
+        lines.append("当前仍有影响的事情：")
+        for event in selected:
+            fact = normalize_fact(event.fact, EVENT_FACT_INJECTION_CHARS)
+            meaning = normalize_fact(event.emotional_meaning, 140)
+            target_label = {
+                "user": "当前聊天对象",
+                "third_party": "第三方",
+                "unknown": "对象未明确",
+            }.get(str(event.target).strip().lower(), "其他对象")
+            lines.append(f"- {fact}（对象：{target_label}；{meaning}）")
+    if max_attention_items > 0 and attention_items:
+        lines.append("仍需留意或接续的事项：")
+        for item in attention_items:
+            status = "待双方确认" if item.status == "proposed" else "仍待关注"
+            timing = format_attention_timing(item, now)
+            overdue = (
+                "，时间已到但尚无完成证据" if is_attention_overdue(item) else ""
+            )
+            suffix = f"，时间提示：{timing}" if timing else ""
+            lines.append(
+                f"- [{attention_kind_label(item.kind)}；{status}] "
+                f"{normalize_fact(item.content, 180)}{suffix}{overdue}"
+            )
     if opts.night_hours and now.astimezone().hour in opts.night_hours:
         missing_active = any(
             event.source == "night_missing"
@@ -224,6 +219,9 @@ def build_snapshot(
             f"当前吃醋或在意的档位：{jealousy_tier}；"
             "只自然体现这种心境，不要扩写或编造原因。"
         )
+    cycle_text = str(cycle_line or "").strip()
+    if cycle_text:
+        lines.append(cycle_text)
     lines.append(intimacy_prompt_text(ledger.intimacy))
     lines.append("</emotion_state_snapshot>")
     return "\n".join(lines)
@@ -332,6 +330,7 @@ def build_injection_content(
     *,
     options: InjectionOptions | None = None,
     include_guidance: bool = True,
+    cycle_line: str = "",
 ) -> str:
     opts = options or InjectionOptions()
     parts: list[str] = []
@@ -343,7 +342,11 @@ def build_injection_content(
         # An empty configured text means the rules block is omitted entirely.
         if configured:
             parts.append(f"<emotion_state_rules>\n{configured}\n</emotion_state_rules>")
-    parts.append(build_snapshot(ledger, max_events, max_attention_items, options=opts))
+    parts.append(
+        build_snapshot(
+            ledger, max_events, max_attention_items, options=opts, cycle_line=cycle_line
+        )
+    )
     if include_guidance:
         block = build_guidance_part(ledger, options=opts)
         if block:
@@ -359,10 +362,16 @@ def inject_prompt(
     rules_text: str | None = None,
     *,
     options: InjectionOptions | None = None,
+    cycle_line: str = "",
 ) -> str:
     return _replace_block(
         prompt or "",
         build_injection_content(
-            ledger, max_events, max_attention_items, rules_text, options=options
+            ledger,
+            max_events,
+            max_attention_items,
+            rules_text,
+            options=options,
+            cycle_line=cycle_line,
         ),
     )

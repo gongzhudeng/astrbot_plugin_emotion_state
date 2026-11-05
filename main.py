@@ -66,6 +66,7 @@ from .core.intimacy import (
     persona_intimacy_tier_label,
 )
 from .core.intrinsic import parse_night_range
+from .core import cycle as cycle_state
 from .core.life_events import (
     build_life_event_prompt,
     draw_slots,
@@ -240,6 +241,8 @@ class EmotionStatePlugin(Star):
         self.context._emotion_state_schedule_context = self._schedule_context
         self.context._emotion_state_get_prompt_context = self._prompt_context
         self.context._emotion_state_get_live_context = self._live_context
+        self.context._emotion_state_cycle_context = self._cycle_context
+        self.cycle_file = self.data_dir / "cycle.json"
         self._register_web_apis()
 
     def _config(self, key: str, default: Any = None) -> Any:
@@ -482,6 +485,11 @@ class EmotionStatePlugin(Star):
             == self._live_context
         ):
             delattr(self.context, "_emotion_state_get_live_context")
+        if (
+            getattr(self.context, "_emotion_state_cycle_context", None)
+            == self._cycle_context
+        ):
+            delattr(self.context, "_emotion_state_cycle_context")
         for name in (
             "_settlement_task",
             "_proactive_task",
@@ -634,6 +642,8 @@ class EmotionStatePlugin(Star):
 
             system_content = ""
             user_content = ""
+            # 生理期那一句每轮都算（很便宜），未配置时是空串，块与改动前逐字一致。
+            cycle_line = self._cycle_line()
             if target == "split":
                 system_content = build_injection_content(
                     ledger,
@@ -642,6 +652,7 @@ class EmotionStatePlugin(Star):
                     rules_text,
                     options=options,
                     include_guidance=False,
+                    cycle_line=cycle_line,
                 )
                 user_content = build_guidance_part(ledger, options=options)
             else:
@@ -651,6 +662,7 @@ class EmotionStatePlugin(Star):
                     max_attention,
                     rules_text,
                     options=options,
+                    cycle_line=cycle_line,
                 )
 
             if system_content:
@@ -674,6 +686,7 @@ class EmotionStatePlugin(Star):
                     max_attention,
                     rules_text,
                     options=options,
+                    cycle_line=cycle_line,
                 )
                 snapshot = capture_injection_snapshot(
                     req.system_prompt,
@@ -699,6 +712,7 @@ class EmotionStatePlugin(Star):
             self._attention_injection_limit(),
             self._injection_rules_text(),
             options=self._injection_options(),
+            cycle_line=self._cycle_line(),
         )
 
     @staticmethod
@@ -789,6 +803,135 @@ class EmotionStatePlugin(Star):
             ledger,
             max(0, int(max_attention_items)),
             options=self._injection_options(),
+        )
+
+    # ------------------------------------------------------------------
+    # 生理期：一个开始日 + 现算，不建状态机（见 core/cycle.py）
+    # ------------------------------------------------------------------
+    #
+    # 存的是**角色**的周期，不是某个用户的关系状态，所以单独一份文件，
+    # 不进 ledger——否则同一时刻对不同人会算出两个「第几天」。
+    # 单角色部署用一个固定键；将来真要多角色，改这个常量即可。
+
+    CYCLE_ROLE_KEY = "default"
+
+    def _cycle_settings(self) -> cycle_state.CycleSettings:
+        if not bool(self._config("cycle_enabled", True)):
+            return cycle_state.CycleSettings()
+        try:
+            roles = cycle_state.load_settings(self.cycle_file)
+        except Exception:  # noqa: BLE001 - 读不到就当没配置，不能拖垮注入
+            return cycle_state.CycleSettings()
+        return roles.get(self.CYCLE_ROLE_KEY, cycle_state.CycleSettings())
+
+    def _cycle_phase(self, today: date | None = None) -> tuple[str, int] | None:
+        return cycle_state.phase_of(today or date.today(), self._cycle_settings())
+
+    def _cycle_line(self) -> str:
+        """对话注入用的身体事实。非经期、未配置、开关关闭时返回空串。"""
+        settings = self._cycle_settings()
+        if not settings.last_period_start:
+            return ""
+        return cycle_state.body_line(self._cycle_phase(), settings)
+
+    async def _cycle_context(
+        self,
+        user_key: str = "",
+        target_date: Any = None,
+        level: str = "light",
+    ) -> dict[str, Any]:
+        """给忙碌管理（日程生成）用的低敏接口：一句身体说明 + 档位 + 第几天。
+
+        「影响多深」由调用方决定（它才是日程的主人），这里只负责把
+        「第几天、哪一段」翻译成一句话。
+
+        拿不到就返回 ``available=False``，让对方按「没有这回事」处理，
+        不要用 0/空串冒充一个真实值。
+        """
+        target = date.today()
+        if isinstance(target_date, datetime):
+            target = target_date.date()
+        elif isinstance(target_date, date):
+            target = target_date
+        elif target_date:
+            try:
+                target = date.fromisoformat(str(target_date)[:10])
+            except ValueError:
+                target = date.today()
+        settings = self._cycle_settings()
+        phase_day = cycle_state.phase_of(target, settings)
+        if phase_day is None:
+            return {"available": False, "line": "", "phase": "", "day": 0}
+        return {
+            "available": True,
+            "line": cycle_state.schedule_hint(phase_day, level, settings),
+            "phase": phase_day[0],
+            "day": phase_day[1],
+        }
+
+    def _cycle_status_text(self) -> str:
+        settings = self._cycle_settings()
+        if not settings.last_period_start:
+            return (
+                "生理期：未配置。\n用「/生理期 开始 2026-11-03」设置本次开始日，"
+                "之后按周期自动推进。"
+            )
+        phase_day = cycle_state.phase_of(date.today(), settings)
+        if phase_day is None:
+            return f"生理期：开始日 {settings.last_period_start} 在未来或不可解析，暂不生效。"
+        phase, day = phase_day
+        phase_name = {
+            cycle_state.PHASE_PERIOD: "经期",
+            cycle_state.PHASE_FOLLICULAR: "经后",
+            cycle_state.PHASE_OVULATION: "排卵期",
+            cycle_state.PHASE_LUTEAL: "经前",
+        }.get(phase, phase)
+        line = cycle_state.body_line(phase_day, settings)
+        return (
+            f"生理期：{phase_name}第 {day} 天"
+            f"（周期 {settings.cycle_length} 天，起始 {settings.last_period_start}）。\n"
+            f"当前注入：{line or '无（这段时间不注入）'}"
+        )
+
+    @staticmethod
+    def _parse_cycle_args(text: str) -> tuple[str, str]:
+        parts = str(text or "").strip().split(maxsplit=1)
+        if not parts:
+            return "", ""
+        return parts[0].strip(), (parts[1].strip() if len(parts) > 1 else "")
+
+    @filter.command("生理期", alias={"cycle"}, desc="查看或设置角色的生理期起始日（仅私聊）。")
+    async def cmd_cycle(self, event: AstrMessageEvent, raw: str = ""):
+        if not self._is_private(event):
+            return
+        action, arg = self._parse_cycle_args(raw)
+        if not action:
+            yield event.plain_result(self._cycle_status_text())
+            return
+        if action in ("开始", "start", "设置"):
+            parsed = cycle_state.parse_start(arg)
+            if parsed is None:
+                yield event.plain_result("日期看不懂。格式：/生理期 开始 2026-11-03")
+                return
+            if parsed > date.today():
+                yield event.plain_result("开始日不能是未来。")
+                return
+            cycle_state.update_role(
+                self.cycle_file,
+                self.CYCLE_ROLE_KEY,
+                cycle_state.CycleSettings(
+                    last_period_start=parsed.isoformat(),
+                    cycle_length=self._int_config("cycle_length", 28),
+                    period_length=self._int_config("cycle_period_length", 5),
+                ),
+            )
+            yield event.plain_result(
+                f"已设置开始日 {parsed.isoformat()}。\n{self._cycle_status_text()}"
+            )
+            return
+        yield event.plain_result(
+            "用法：/生理期 ｜ /生理期 开始 2026-11-03\n"
+            "开关与强度在插件配置页（生理期分组）。"
         )
 
     @staticmethod
@@ -2175,6 +2318,7 @@ class EmotionStatePlugin(Star):
             self._attention_injection_limit(),
             self._injection_rules_text(),
             options=self._injection_options(),
+            cycle_line=self._cycle_line(),
         )
         return capture_injection_snapshot(prompt, ledger, source="preview")
 
@@ -2325,6 +2469,7 @@ class EmotionStatePlugin(Star):
             self._int_config("max_injected_events", 2),
             self._attention_injection_limit(),
             options=self._injection_options(),
+            cycle_line=self._cycle_line(),
         )
 
     async def _diary_rerun_text(self, event: AstrMessageEvent) -> str | None:

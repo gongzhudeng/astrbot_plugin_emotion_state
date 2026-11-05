@@ -476,6 +476,22 @@ function renderInjectionView(payload) {
 
   $("inj-body-stage").textContent = text(presentation.body_reaction_stage) || "…";
 
+  // 生理期：只有一行。未配置时给可执行的提示，而不是显示一个空值。
+  const cycle = presentation.cycle || {};
+  const cycleCell = $("inj-cycle");
+  if (cycleCell) {
+    if (!cycle.configured) {
+      cycleCell.textContent = "未配置（/生理期 开始 YYYY-MM-DD）";
+    } else if (!text(cycle.phase)) {
+      cycleCell.textContent = "开始日异常，暂不生效";
+    } else {
+      const next = Number(cycle.next_period_in_days);
+      cycleCell.textContent =
+        `${text(cycle.phase_label)}第 ${Number(cycle.day) || "?"} 天` +
+        (next > 0 ? ` · 距下次约 ${next} 天` : "");
+    }
+  }
+
   // 后端把 selected_injection_events 放在 diagnostics 下（与 attention 的 presentation 位置不同）
   const injectedEvents = Array.isArray(diagnostics.selected_injection_events)
     ? diagnostics.selected_injection_events

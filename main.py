@@ -186,7 +186,7 @@ def _require_json_object(raw: str) -> dict[str, Any]:
     PLUGIN_NAME,
     "灵犀 · 内心世界",
     "私聊专用的连续情绪、心事、每日回顾与亲密状态系统。",
-    "0.3.33",
+    "0.3.34",
     "https://github.com/gongzhudeng/astrbot_plugin_emotion_state",
 )
 class EmotionStatePlugin(Star):
@@ -833,6 +833,53 @@ class EmotionStatePlugin(Star):
         if not settings.last_period_start:
             return ""
         return cycle_state.body_line(self._cycle_phase(), settings)
+
+    def _cycle_view(self) -> dict[str, Any]:
+        """面板用的一份摘要。和注入无关，只为了让人一眼看出「今天第几天」。"""
+        settings = self._cycle_settings()
+        if not settings.last_period_start:
+            return {
+                "configured": False,
+                "phase": "",
+                "phase_label": "",
+                "day": 0,
+                "line": "",
+                "next_period_in_days": 0,
+                "start": "",
+                "cycle_length": settings.cycle_length,
+                "period_length": settings.period_length,
+            }
+        phase_day = self._cycle_phase()
+        if phase_day is None:
+            return {
+                "configured": True,
+                "phase": "",
+                "phase_label": "日期异常",
+                "day": 0,
+                "line": "",
+                "next_period_in_days": 0,
+                "start": settings.last_period_start,
+                "cycle_length": settings.cycle_length,
+                "period_length": settings.period_length,
+            }
+        phase, day = phase_day
+        label = {
+            cycle_state.PHASE_PERIOD: "经期",
+            cycle_state.PHASE_FOLLICULAR: "经后",
+            cycle_state.PHASE_OVULATION: "排卵期",
+            cycle_state.PHASE_LUTEAL: "经前",
+        }.get(phase, phase)
+        return {
+            "configured": True,
+            "phase": phase,
+            "phase_label": label,
+            "day": day,
+            "line": cycle_state.body_line(phase_day, settings),
+            "next_period_in_days": max(0, settings.cycle_length - day + 1),
+            "start": settings.last_period_start,
+            "cycle_length": settings.cycle_length,
+            "period_length": settings.period_length,
+        }
 
     async def _cycle_context(
         self,
@@ -2929,6 +2976,7 @@ class EmotionStatePlugin(Star):
                     "persona_intimacy_tier": tier,
                     "body_reaction_stage": intimacy_stage_label(stage),
                     "intimacy_stage": intimacy_stage_label(stage),
+                    "cycle": self._cycle_view(),
                     "attention_items": [
                         {
                             **item.review_view(),

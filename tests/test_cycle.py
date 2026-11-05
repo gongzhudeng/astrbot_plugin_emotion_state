@@ -206,3 +206,27 @@ def test_parse_cycle_args_keeps_the_date() -> None:
 
     assert EmotionStatePlugin._parse_cycle_args("开始 2026-11-06") == ("开始", "2026-11-06")
     assert EmotionStatePlugin._parse_cycle_args("") == ("", "")
+
+
+def test_image_line_variants() -> None:
+    """情绪查看图片里那一行：只在经期/经前出现，未来日期说「N 天后开始」。"""
+    from astrbot_plugin_emotion_state.core.image_renderer import EmotionStateImageRenderer
+
+    line = EmotionStateImageRenderer._cycle_line
+    assert line(None) == ""
+    assert line({"configured": False}) == ""
+    assert line({"configured": True, "phase": "", "starts_in_days": 1}) == "1 天后开始"
+    assert (
+        line(
+            {
+                "configured": True,
+                "phase": "period",
+                "phase_label": "经期",
+                "day": 2,
+                "next_period_in_days": 27,
+            }
+        )
+        == "经期第 2 天 · 距下次约 27 天"
+    )
+    # 经后/排卵期没有值得说的，图片上不该多一行。
+    assert line({"configured": True, "phase": "follicular", "phase_label": "", "day": 8}) == ""

@@ -43,6 +43,7 @@ class EmotionStateImageRenderer:
         now: datetime,
         mode: object = "自动",
         guidance: dict[str, str] | None = None,
+        cycle: dict | None = None,
     ) -> bytes:
         """Render the mood sheet as encoded PNG bytes.
 
@@ -54,13 +55,14 @@ class EmotionStateImageRenderer:
             now: Current local time used for highlighting and theme selection.
             mode: Automatic, light, or dark display mode.
             guidance: Cached reply suggestion (tone/can_say/avoid) or None.
+            cycle: Cycle summary (same shape as ``_cycle_view()``) or None.
 
         Returns:
             Encoded RGB PNG bytes.
         """
         theme = self.resolve_theme(mode, now)
         return self._render(
-            ledger, events, attention_items, body_stage, now, theme, guidance
+            ledger, events, attention_items, body_stage, now, theme, guidance, cycle
         )
 
     # -- palette -----------------------------------------------------------
@@ -300,7 +302,15 @@ class EmotionStateImageRenderer:
             y += 44
         return card_h
 
-    def _draw_body(self, cv: Canvas, top, ledger: StateLedger, body_stage: str, pal):
+    def _draw_body(
+        self,
+        cv: Canvas,
+        top,
+        ledger: StateLedger,
+        body_stage: str,
+        pal,
+        cycle: dict | None = None,
+    ):
         ink, sub = pal["ink"], pal["sub"]
         rose, lavender = pal["rose"], pal["lavender"]
         self._card(cv, (58, top, 1022, top + 104), pal, radius=26)
@@ -308,6 +318,11 @@ class EmotionStateImageRenderer:
         cv.heart(116, top + 52, 28, c(rose))
         cv.text(176, top + 18, "身体反应", font(17, 450), sub)
         cv.text(176, top + 46, self._body_tier_label(body_stage), font(26, 700), ink)
+        # 生理期单独一行：它是慢变量，和「敏感度 / 唤起」两个即时读数不是一类东西，
+        # 挤进上面那排 chip 会让卡片在经期反而更难读。
+        cycle_text = self._cycle_line(cycle)
+        if cycle_text:
+            cv.text(176, top + 82, cycle_text, font(15, 500), rose)
         sens = round(ledger.intimacy.body_sensitivity * 100)
         arousal = round(ledger.intimacy.sexual_arousal * 100)
         chip_f = font(17, 600)
@@ -334,6 +349,20 @@ class EmotionStateImageRenderer:
             anchor="ra",
         )
         return 104
+
+    @staticmethod
+    def _cycle_line(cycle: dict | None) -> str:
+        """图片里那行生理期文案；没有就返回空串（卡片保持原样）。"""
+        if not isinstance(cycle, dict) or not cycle.get("configured"):
+            return ""
+        if not str(cycle.get("phase") or "").strip():
+            days = int(cycle.get("starts_in_days") or 0)
+            return f"{days} 天后开始" if days > 0 else ""
+        label = str(cycle.get("phase_label") or "").strip()
+        day = int(cycle.get("day") or 0)
+        next_days = int(cycle.get("next_period_in_days") or 0)
+        head = f"{label}第 {day} 天" if label and day else label
+        return f"{head} · 距下次约 {next_days} 天" if next_days > 0 else head
 
     def _draw_section_head(self, cv: Canvas, y, title, count, accent, pal):
         ink = pal["ink"]
@@ -471,6 +500,7 @@ class EmotionStateImageRenderer:
         now: datetime,
         theme: str,
         guidance: dict[str, str] | None = None,
+        cycle: dict | None = None,
     ) -> bytes:
         pal = self._palette(theme)
         sub = pal["sub"]
@@ -515,7 +545,7 @@ class EmotionStateImageRenderer:
 
         self._draw_header(cv, pal, now)
         self._draw_mood(cv, mood_top, ledger, pal)
-        self._draw_body(cv, body_top, ledger, body_stage, pal)
+        self._draw_body(cv, body_top, ledger, body_stage, pal, cycle)
         y = self._draw_events(cv, events_top, events, pal, now)
         y = self._draw_attention(cv, y + 16, attention_items, pal)
         if guidance:

@@ -2529,6 +2529,7 @@ class EmotionStatePlugin(Star):
             datetime.now().astimezone(),
             self._config("emotion_view_theme", "自动"),
             self._guidance_view_payload(ledger),
+            self._cycle_view(),
         )
 
     def _guidance_view_payload(self, ledger: StateLedger) -> dict[str, str] | None:

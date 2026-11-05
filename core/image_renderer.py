@@ -318,11 +318,12 @@ class EmotionStateImageRenderer:
         cv.heart(116, top + 52, 28, c(rose))
         cv.text(176, top + 18, "身体反应", font(17, 450), sub)
         cv.text(176, top + 46, self._body_tier_label(body_stage), font(26, 700), ink)
-        # 生理期单独一行：它是慢变量，和「敏感度 / 唤起」两个即时读数不是一类东西，
-        # 挤进上面那排 chip 会让卡片在经期反而更难读。
+        # 生理期跟在「强烈」右边那一行的空位上，不另起一行：
+        # 卡片第三行原本是留白（呼吸位），塞字会把卡片压得很挤。
+        # x 从标题左侧再往右让出一个「两字档位 + 间距」的宽度（176 + 2×26 + 22）。
         cycle_text = self._cycle_line(cycle)
         if cycle_text:
-            cv.text(176, top + 82, cycle_text, font(15, 500), rose)
+            cv.text(260, top + 52, cycle_text, font(15, 500), rose)
         sens = round(ledger.intimacy.body_sensitivity * 100)
         arousal = round(ledger.intimacy.sexual_arousal * 100)
         chip_f = font(17, 600)

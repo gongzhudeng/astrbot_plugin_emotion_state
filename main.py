@@ -974,11 +974,31 @@ class EmotionStatePlugin(Star):
             return "", ""
         return parts[0].strip(), (parts[1].strip() if len(parts) > 1 else "")
 
+    @staticmethod
+    def _cycle_raw_args(event: Any, sub: str = "", value: str = "") -> str:
+        """从原始消息里取参数，不依赖宿主的按位置分配。
+
+        宿主把消息按空格切成分给 handler 的每个形参；`/生理期 开始 2026-11-06`
+        有三个词、handler 只有两个形参时，日期会被丢掉。而 `GreedyStr` 注解在
+        `from __future__ import annotations` 下会变成字符串，宿主认不出来。
+        所以这里直接读原文、剥掉命令前缀——不依赖任何一个版本的参数机制。
+        """
+        text = str(getattr(event, "message_str", "") or "").strip()
+        for prefix in ("/生理期", "生理期", "/cycle", "cycle"):
+            if text.startswith(prefix):
+                text = text[len(prefix):].strip()
+                break
+        if text:
+            return text
+        return " ".join(part for part in (sub, value) if part).strip()
+
     @filter.command("生理期", alias={"cycle"}, desc="查看或设置角色的生理期起始日（仅私聊）。")
-    async def cmd_cycle(self, event: AstrMessageEvent, raw: str = ""):
+    async def cmd_cycle(self, event: AstrMessageEvent, sub: str = "", value: str = ""):
         if not self._is_private(event):
             return
-        action, arg = self._parse_cycle_args(raw)
+        action, arg = self._parse_cycle_args(
+            self._cycle_raw_args(event, sub, value)
+        )
         if not action:
             yield event.plain_result(self._cycle_status_text())
             return

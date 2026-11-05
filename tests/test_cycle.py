@@ -181,3 +181,28 @@ def test_view_reports_upcoming_start(tmp_path) -> None:
     assert view["phase"] == ""
     assert view["starts_in_days"] == 1
     assert plugin._cycle_line() == ""
+
+
+def test_raw_args_come_from_the_message_not_param_slots() -> None:
+    """宿主按空格逐个分配参数：handler 只有两个形参时，日期会被丢掉。
+
+    这条是 2026-11-05 的真机故障：`/生理期 开始 2026-11-06` 回「日期看不懂」。
+    所以参数一律从 message_str 里剥前缀取，不依赖形参个数。
+    """
+    from types import SimpleNamespace
+
+    from astrbot_plugin_emotion_state.main import EmotionStatePlugin
+
+    raw = EmotionStatePlugin._cycle_raw_args
+    assert raw(SimpleNamespace(message_str="/生理期 开始 2026-11-06")) == "开始 2026-11-06"
+    assert raw(SimpleNamespace(message_str="生理期 开始 2026-11-06")) == "开始 2026-11-06"
+    assert raw(SimpleNamespace(message_str="/生理期")) == ""
+    # 拿不到原文时退回形参，至少不丢功能。
+    assert raw(SimpleNamespace(message_str=""), "开始", "2026-11-06") == "开始 2026-11-06"
+
+
+def test_parse_cycle_args_keeps_the_date() -> None:
+    from astrbot_plugin_emotion_state.main import EmotionStatePlugin
+
+    assert EmotionStatePlugin._parse_cycle_args("开始 2026-11-06") == ("开始", "2026-11-06")
+    assert EmotionStatePlugin._parse_cycle_args("") == ("", "")

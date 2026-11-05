@@ -159,3 +159,25 @@ def test_empty_cycle_line_leaves_block_byte_identical() -> None:
     ledger = StateLedger(user_key="private:cycle")
     assert build_snapshot(ledger) == build_snapshot(ledger, cycle_line="")
     assert build_snapshot(ledger) == build_snapshot(ledger, cycle_line="   ")
+
+
+def test_view_reports_upcoming_start(tmp_path) -> None:
+    """提前设置（明天开始）是正常需求，不该报「异常」。"""
+    import json as _json
+    from datetime import timedelta
+
+    from astrbot_plugin_emotion_state.main import EmotionStatePlugin
+
+    plugin = object.__new__(EmotionStatePlugin)
+    plugin.config = {}
+    plugin.cycle_file = tmp_path / "cycle.json"
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    (tmp_path / "cycle.json").write_text(
+        _json.dumps({"version": 1, "roles": {"default": {"last_period_start": tomorrow}}}),
+        encoding="utf-8",
+    )
+    view = plugin._cycle_view()
+    assert view["configured"] is True
+    assert view["phase"] == ""
+    assert view["starts_in_days"] == 1
+    assert plugin._cycle_line() == ""

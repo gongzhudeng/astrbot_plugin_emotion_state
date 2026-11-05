@@ -846,11 +846,28 @@ class EmotionStatePlugin(Star):
                 "day": 0,
                 "line": "",
                 "next_period_in_days": 0,
+                "starts_in_days": 0,
                 "start": "",
                 "cycle_length": settings.cycle_length,
                 "period_length": settings.period_length,
             }
         phase_day = self._cycle_phase()
+        start = cycle_state.parse_start(settings.last_period_start)
+        today = date.today()
+        if start is not None and start > today:
+            # 提前设置（明天开始）：不算「异常」，只是还没到生效日。
+            return {
+                "configured": True,
+                "phase": "",
+                "phase_label": "尚未开始",
+                "day": 0,
+                "line": "",
+                "next_period_in_days": 0,
+                "starts_in_days": (start - today).days,
+                "start": settings.last_period_start,
+                "cycle_length": settings.cycle_length,
+                "period_length": settings.period_length,
+            }
         if phase_day is None:
             return {
                 "configured": True,
@@ -859,6 +876,7 @@ class EmotionStatePlugin(Star):
                 "day": 0,
                 "line": "",
                 "next_period_in_days": 0,
+                "starts_in_days": 0,
                 "start": settings.last_period_start,
                 "cycle_length": settings.cycle_length,
                 "period_length": settings.period_length,
@@ -877,6 +895,7 @@ class EmotionStatePlugin(Star):
             "day": day,
             "line": cycle_state.body_line(phase_day, settings),
             "next_period_in_days": max(0, settings.cycle_length - day + 1),
+            "starts_in_days": 0,
             "start": settings.last_period_start,
             "cycle_length": settings.cycle_length,
             "period_length": settings.period_length,
@@ -924,9 +943,16 @@ class EmotionStatePlugin(Star):
                 "生理期：未配置。\n用「/生理期 开始 2026-11-03」设置本次开始日，"
                 "之后按周期自动推进。"
             )
-        phase_day = cycle_state.phase_of(date.today(), settings)
+        start = cycle_state.parse_start(settings.last_period_start)
+        today = date.today()
+        if start is not None and start > today:
+            # 提前一天设置是正常需求（明天开始）；这里说清「哪天起生效」，
+            # 不要写成「异常」——用户没做错任何事。
+            days = (start - today).days
+            return f"生理期：将于 {start.isoformat()} 起生效（还有 {days} 天）。\n当前不注入、不影响日程。"
+        phase_day = cycle_state.phase_of(today, settings)
         if phase_day is None:
-            return f"生理期：开始日 {settings.last_period_start} 在未来或不可解析，暂不生效。"
+            return f"生理期：开始日 {settings.last_period_start} 无法解析，暂不生效。"
         phase, day = phase_day
         phase_name = {
             cycle_state.PHASE_PERIOD: "经期",
@@ -961,8 +987,10 @@ class EmotionStatePlugin(Star):
             if parsed is None:
                 yield event.plain_result("日期看不懂。格式：/生理期 开始 2026-11-03")
                 return
-            if parsed > date.today():
-                yield event.plain_result("开始日不能是未来。")
+            # 允许提前 7 天设置（「明天开始」「下周一」都是真实需求）；
+            # 再远的多半是年份填错，拦住比静默生效好。
+            if (parsed - date.today()).days > 7:
+                yield event.plain_result("开始日最多提前 7 天，确认一下日期？")
                 return
             cycle_state.update_role(
                 self.cycle_file,

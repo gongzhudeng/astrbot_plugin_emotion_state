@@ -483,7 +483,10 @@ function renderInjectionView(payload) {
     if (!cycle.configured) {
       cycleCell.textContent = "未配置（/生理期 开始 YYYY-MM-DD）";
     } else if (!text(cycle.phase)) {
-      cycleCell.textContent = "开始日异常，暂不生效";
+      const soon = Number(cycle.starts_in_days);
+      cycleCell.textContent = soon > 0
+        ? `尚未开始（${soon} 天后生效）`
+        : "开始日异常，暂不生效";
     } else {
       const next = Number(cycle.next_period_in_days);
       cycleCell.textContent =

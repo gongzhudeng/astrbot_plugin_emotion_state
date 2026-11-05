@@ -512,6 +512,9 @@ function renderInjectionView(payload) {
   const injectedAttention = Array.isArray(presentation.selected_injection_attention_items)
     ? presentation.selected_injection_attention_items
     : [];
+  const excludedAttention = Array.isArray(presentation.excluded_attention)
+    ? presentation.excluded_attention
+    : [];
   $("inj-attention-count").textContent = injectedAttention.length
     ? ` ${injectedAttention.length} 条`
     : "";
@@ -523,12 +526,24 @@ function renderInjectionView(payload) {
         item.due_at ? `截止 ${formatBeijingTime(item.due_at).slice(0, 16)}` : "",
       ].filter(Boolean).join(" · ") || "长期挂起")}</em></span>
     </article>
-  `).join("") : `<p class="status-line">此刻没有待关注事项被注入提示词</p>`;
+  `).join("") : `<p class="status-line">此刻没有待关注事项被注入提示词${attentionExclusionHint(excludedAttention)}</p>`;
 
   $("injection-count").textContent =
     `心事 ${injectedEvents.length} · 待关注 ${injectedAttention.length}`;
 
   renderGuidance(diagnostics);
+}
+
+/** 把「未注入」的原因汇总成一句，避免上面说没有、下面列着一条的自相矛盾。 */
+function attentionExclusionHint(items) {
+  if (!Array.isArray(items) || !items.length) return "";
+  const counts = new Map();
+  for (const item of items) {
+    const reason = text(item.exclusion_reason) || "未通过筛选";
+    counts.set(reason, (counts.get(reason) || 0) + 1);
+  }
+  const parts = [...counts.entries()].map(([reason, n]) => `${n} 条${reason}`);
+  return `（${parts.join("，")}）`;
 }
 
 function renderGuidance(diagnostics) {

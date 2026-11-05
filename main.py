@@ -21,6 +21,7 @@ from astrbot.core.message.components import Image, Plain, Reply
 from astrbot.core.provider.entities import ProviderRequest
 
 from .core.attention import (
+    attention_exclusion_reason,
     attention_kind_label,
     attention_status_label,
     format_attention_timing,
@@ -2961,6 +2962,21 @@ class EmotionStatePlugin(Star):
             attention_limit,
             include_proposed=False,
         )
+        # 未终结但没进注入的，把原因一起给面板。不写出来，用户只能看到
+        # 「上面说没有、下面列着一条」，看起来像 bug。
+        selected_attention_ids = {item.id for item in selected_attention}
+        attention_limit_reached = len(selected_attention) >= attention_limit
+        excluded_attention = [
+            {
+                **item.to_dict(),
+                "exclusion_reason": attention_exclusion_reason(
+                    item, limit_reached=attention_limit_reached
+                ),
+            }
+            for item in ledger.attention_items
+            if item.status in {"open", "proposed"}
+            and item.id not in selected_attention_ids
+        ]
         stage = body_reaction_stage(
             ledger.intimacy.body_sensitivity,
             ledger.intimacy.sexual_arousal,
@@ -2996,6 +3012,7 @@ class EmotionStatePlugin(Star):
                         item.to_dict() for item in selected_attention
                     ],
                     "selected_injection_attention_count": len(selected_attention),
+                    "excluded_attention": excluded_attention,
                     "max_injected_attention_items": attention_limit,
                 },
                 "diagnostics": {

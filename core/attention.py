@@ -856,3 +856,32 @@ def select_attention_items(
 
     candidates.sort(key=score)
     return candidates[: max(0, int(limit))]
+
+
+def attention_exclusion_reason(
+    item: AttentionItem,
+    *,
+    limit_reached: bool = False,
+) -> str:
+    """这条为什么没进注入。空串 = 它本来就该进。
+
+    只给面板看，不参与任何判定——判定在 ``select_attention_items`` 里，
+    两处各写一套迟早会漂移。这里按同一批判据，只是把「被哪一条挡了」说出来。
+
+    存在的理由：面板上半部说「没有待关注事项被注入」，下半部却列着一条，
+    用户看到的是自相矛盾。真正的原因（待双方确认）不写出来，就只能猜是 bug。
+    """
+    if not is_open_attention(item):
+        return "已终结"
+    if item.status != "open":
+        return "待双方确认，不算约定"
+    if not item.explicit:
+        return "不是明说的约定"
+    if is_short_lived_attention(item):
+        return "短期状态，不进注入"
+    threshold = 0.62 if item.status == "open" else 0.72
+    if item.confidence < threshold:
+        return "证据不足"
+    if limit_reached:
+        return "被条数上限挤掉"
+    return ""

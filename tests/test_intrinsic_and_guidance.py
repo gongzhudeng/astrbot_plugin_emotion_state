@@ -1291,6 +1291,10 @@ async def test_run_batch_review_prompt_assembles_with_naming_rule() -> None:
     assert "fact（**以 AI 角色本人的第一人称「我」书写**" in prompt
     assert "fact 的「我」只能是 AI 角色本人" in prompt
     assert "我的生日" in prompt
+    # v0.3.39: 写 fact 时的时间必须是「发生时间」，不是「这次聊到它的时间」。
+    # 2026-11-06 凌晨的姜茶在上午被重提后记成「今天早上」，表达建议跟着说错。
+    assert "事情发生的时间" in prompt
+    assert "这次聊到它的时间" in prompt
     # The ambiguous construction is gone.
     assert "对方称" not in prompt
     # The chat tail keeps the configured name instead of the generic label.
@@ -1378,7 +1382,7 @@ def test_plugin_version_matches_metadata() -> None:
     registered = re.search(r'@register\((?:[^)]*\n)*?\s*"([^"]+)",\n\s*"https', main_source)
     assert registered is not None, "could not locate the @register version"
     assert registered.group(1) == declared
-    assert declared == "0.3.38"
+    assert declared == "0.3.39"
 
 
 def test_guidance_prompt_pins_speaker_names() -> None:

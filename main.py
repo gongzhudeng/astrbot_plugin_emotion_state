@@ -187,7 +187,7 @@ def _require_json_object(raw: str) -> dict[str, Any]:
     PLUGIN_NAME,
     "灵犀 · 内心世界",
     "私聊专用的连续情绪、心事、每日回顾与亲密状态系统。",
-    "0.3.38",
+    "0.3.39",
     "https://github.com/gongzhudeng/astrbot_plugin_emotion_state",
 )
 class EmotionStatePlugin(Star):
@@ -1826,6 +1826,11 @@ class EmotionStatePlugin(Star):
             "用户原话里的「我」代表用户，必须改写成用户的名字；"
             "凡是生日、纪念日、约定这类属于用户的事，绝不能写成「我的生日」"
             "「我答应过」这类把用户的事安到角色头上的句子。\n"
+            "- **fact 里写到时间时，只能是「事情发生的时间」，不是「这次聊到它的时间」**："
+            "凌晨送到的东西，上午重提就写「昨晚」而不是「今天早上」；"
+            "跨天的事一律用「昨晚/昨天」这类词，拿不准就不写时间。"
+            "写错时间会让下游把旧事当成今天的事（2026-11-06 的姜茶被记成「早上」，"
+            "表达建议照着说了「今天上午」）。\n"
             f"{attention_section}"
             "## 输出格式\n"
             '只返回 JSON 对象：{"event_observations": [...], '

@@ -813,6 +813,8 @@ def select_attention_items(
     *,
     include_proposed: bool = False,
     now: datetime | None = None,
+    user_message: str = "",
+    recent_messages: list[str] | None = None,
 ) -> list[AttentionItem]:
     """Pick the items injected into the reply prompt.
 
@@ -821,6 +823,9 @@ def select_attention_items(
     items — "他说头晕" deserves attention before "周末看电影". Already-overdue
     items still rank first: a promise you are late for must not be pushed out
     by a fresh care item.
+
+    v0.3.35: 加入注入时机（``should_inject``）。有明确时间的事项只在临近窗口内出现，
+    除非他主动提起、或已逾期。没有明确时间的事项保持现状。
     """
     current_time = now or utc_now()
     candidates = [
@@ -831,6 +836,7 @@ def select_attention_items(
         and item.explicit
         and not is_short_lived_attention(item)
         and item.confidence >= (0.62 if item.status == "open" else 0.72)
+        and should_inject(item, current_time, user_message, recent_messages)
     ]
 
     def evidence_timestamp(item: AttentionItem) -> float:
@@ -862,6 +868,9 @@ def attention_exclusion_reason(
     item: AttentionItem,
     *,
     limit_reached: bool = False,
+    now: datetime | None = None,
+    user_message: str = "",
+    recent_messages: list[str] | None = None,
 ) -> str:
     """这条为什么没进注入。空串 = 它本来就该进。
 
@@ -882,6 +891,173 @@ def attention_exclusion_reason(
     threshold = 0.62 if item.status == "open" else 0.72
     if item.confidence < threshold:
         return "证据不足"
+    # 有明确时间、但此刻不在窗口内：不是「不合格」，是「还不到时候」
+    if item.due_at and not should_inject(item, now, user_message, recent_messages):
+        return "还未到时间"
     if limit_reached:
         return "被条数上限挤掉"
     return ""
+
+
+# ---------------------------------------------------------------------------
+# 注入时机（v0.3.35）：不是所有事项都该一直在上下文里
+#
+# 规则只有一句：**该出现的时候出现，不该出现的时候别出声**。
+#   1. care（他此刻不舒服/心情不好）——一直注入，它不是「将来的事」；
+#   2. 已逾期未完成——继续注入，这时候才最该催；
+#   3. 他主动提起了（关键词/语义命中）——立即注入，不然会变成失忆；
+#   4. 有明确时间——只在临近窗口内注入，其他时候安静躺在后台；
+#   5. 没有明确时间——保持现状（一直注入），先不动它。
+# ---------------------------------------------------------------------------
+
+#: 不同事项的提前量（秒）。约定比计划紧，提醒最紧。
+INJECTION_LEAD_SECONDS = {
+    "commitment": 2 * 3600,
+    "plan": 4 * 3600,
+    "remember": 4 * 3600,
+    "follow_up": 0,  # 只有日期时当天 0 点就出现
+    "care": 0,
+}
+
+#: 从内容里抽关键词时要丢掉的虚词/动词/时间词。抽出来的名词才适合当「提到没」的判据。
+_MENTION_STOPWORDS = frozenset({
+    "我们", "你们", "他们", "她们", "自己", "这个", "那个", "这些", "那些",
+    "什么", "怎么", "为什么", "是不是", "对不对", "好不好", "要不要", "能不能",
+    "一下", "一些", "一点", "一个", "两个", "几个", "很多", "好多",
+    "时候", "地方", "东西", "事情", "问题", "情况",
+    "明天", "后天", "今天", "昨天", "上午", "下午", "晚上", "中午", "早上", "凌晨",
+    "星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期天", "周日", "周末",
+    "周一", "周二", "周三", "周四", "周五", "周六",
+    "记得", "忘记", "提醒", "告诉", "知道", "觉得", "认为", "希望", "想要",
+    "可以", "应该", "必须", "需要", "能够", "可能", "也许", "大概",
+    "然后", "之后", "之前", "现在", "刚才", "马上", "立刻", "待会", "一会",
+})
+
+#: 两个字的纯动词（"说要""要下"）不该当关键词。只过滤两字组合，长词不受影响。
+_MENTION_VERB_CHARS = "说要去做给看买吃玩聊拍发写读听唱跳跑走坐站躺睡醒来回出进上下开关打扫洗穿脱戴摘拿放收拾整理清洁擦拖"
+
+#: 当分隔符用的单字：动词/介词/虚词。它们不该粘在名词上
+#: （"给电动车充电" 里的「给」、「下盗版」里的「下」）。
+#: 注意「还」不在里面——它是「还书」这种实词的一部分，当分隔会把词切坏；
+#: 它在「还想买」里做副词时，双向匹配仍能命中「买猫粮」。
+_MENTION_SEPARATOR_CHARS = set("说要去做给看买吃玩聊拍发写读听唱跳跑走坐站躺睡醒来回出进上下开关就都把被和跟与在是的了吗吧呢啊呀哦嗯")
+
+
+def extract_mention_keywords(content: str) -> list[str]:
+    """从事项内容里抽「能当话题锚点」的词块。
+
+    做法是**先切再取**：把停用词、人称、单字动词都当分隔符替换成空格，
+    剩下连着的才是名词块（"电动车充电""刃零的盗版"里的实体）。
+
+    抽出来的是**词块**，不保证是标准词——所以匹配时必须双向：
+    「电动车充电」这个块能匹配用户说的「充电」，靠的是 ``_mention_matches``
+    里的片段回查，不是指望这里切得多准。中文不做分词切不准，硬切反而更糟。
+    """
+    text = re.sub(r"[，。、；：！？…\s（）()「」“”‘’\",.!?;:\-—~～]", " ", str(content or ""))
+    # 相对时间整体去掉（「三天后」「两个小时后」「下下周」），它们不是话题锚点
+    text = re.sub(
+        r"(?:下+个?)?(?:[0-9一二三四五六七八九十两几]+(?:天|周|星期|个月|小时|分钟))(?:后|前|之后|之前)?",
+        " ",
+        text,
+    )
+    # 人称与机器人称呼
+    text = re.sub(r"(Mando|mando|小怡|我们|你们|他们|她们|自己)", " ", text)
+    # 长的停用词先替换（避免「星期天」被拆成「星期」+「天」）
+    for word in sorted(_MENTION_STOPWORDS, key=len, reverse=True):
+        text = text.replace(word, " ")
+    # 单字动词/虚词当分隔
+    text = "".join(" " if ch in _MENTION_SEPARATOR_CHARS else ch for ch in text)
+    words = [
+        match.group()
+        for match in re.finditer(r"[\u4e00-\u9fff]{2,6}", text)
+        if match.group() not in _MENTION_STOPWORDS
+    ]
+    return list(dict.fromkeys(words))
+
+
+def _mention_matches(keyword: str, text: str) -> bool:
+    """词块与一句话是否算「谈到同一件事」。
+
+    双向：整块出现在句子里，或句子里 2 字以上的片段落在词块里。
+    后者是为了让「电动车充电」被「充电」命中——只做单向匹配的话，
+    长词块几乎永远匹配不上。
+    """
+    if not keyword or not text:
+        return False
+    if keyword in text:
+        return True
+    for size in (4, 3, 2):
+        if len(text) < size:
+            continue
+        for index in range(len(text) - size + 1):
+            fragment = text[index : index + size]
+            if fragment.isascii():
+                continue
+            if fragment in keyword:
+                return True
+    return False
+
+
+def is_mentioned(
+    item: AttentionItem,
+    user_message: str = "",
+    recent_messages: list[str] | None = None,
+) -> bool:
+    """他这句话（或最近几句）是不是在谈这件事。
+
+    只用当前这一句会漏：他说「对了」下一句才说「充电」。所以把最近几条
+    用户消息一起拿来匹配——更接近人「想起」的过程。
+    """
+    keywords = extract_mention_keywords(item.content)
+    if not keywords:
+        return False
+    texts = [str(user_message or "")] + [str(t) for t in (recent_messages or [])]
+    for text in texts:
+        if not text:
+            continue
+        for kw in keywords:
+            if _mention_matches(kw, text):
+                return True
+    return False
+
+
+def _injection_lead_seconds(kind: str) -> int:
+    return int(INJECTION_LEAD_SECONDS.get(kind, 2 * 3600))
+
+
+def should_inject(
+    item: AttentionItem,
+    now: datetime | None = None,
+    user_message: str = "",
+    recent_messages: list[str] | None = None,
+) -> bool:
+    """这条此刻该不该进上下文。
+
+    判据顺序有讲究：care 与逾期是「无条件」，提及是「例外放行」，
+    窗口是「默认规则」，无时间事项是「保持现状」。
+    """
+    current = now or utc_now()
+    # 1. care 不是「将来的事」，一直注入
+    if item.kind == "care":
+        return True
+    # 2. 逾期未完成：这时候最该催，不受窗口限制
+    if is_attention_overdue(item, current):
+        return True
+    # 3. 他主动提起了：立即注入，不然就是失忆
+    if is_mentioned(item, user_message, recent_messages):
+        return True
+    # 4. 有明确时间：只在窗口内出现
+    if item.due_at:
+        try:
+            due = parse_time(item.due_at)
+        except (TypeError, ValueError):
+            return True  # 解析不出来就当没有约束，宁可多给也别漏
+        if due.tzinfo is None:
+            due = due.replace(tzinfo=current.tzinfo)
+        # 只有日期（00:00）时，当天 0 点就开始注入——「星期天」是整天的事
+        if due.hour == 0 and due.minute == 0:
+            return current.date() >= due.date()
+        lead = _injection_lead_seconds(item.kind)
+        return (due - current).total_seconds() <= lead
+    # 5. 无明确时间：保持现状（一直注入）
+    return True

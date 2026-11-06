@@ -158,11 +158,16 @@ def build_snapshot(
     *,
     options: InjectionOptions | None = None,
     cycle_line: str = "",
+    user_message: str = "",
+    recent_messages: list[str] | None = None,
 ) -> str:
     opts = options or InjectionOptions()
     selected = select_injected_events(ledger.events, max_events)
     attention_items = select_attention_items(
-        ledger.attention_items, max_attention_items
+        ledger.attention_items,
+        max_attention_items,
+        user_message=user_message,
+        recent_messages=recent_messages,
     )
     now = opts.current_time()
     lines = [
@@ -331,6 +336,8 @@ def build_injection_content(
     options: InjectionOptions | None = None,
     include_guidance: bool = True,
     cycle_line: str = "",
+    user_message: str = "",
+    recent_messages: list[str] | None = None,
 ) -> str:
     opts = options or InjectionOptions()
     parts: list[str] = []
@@ -344,7 +351,13 @@ def build_injection_content(
             parts.append(f"<emotion_state_rules>\n{configured}\n</emotion_state_rules>")
     parts.append(
         build_snapshot(
-            ledger, max_events, max_attention_items, options=opts, cycle_line=cycle_line
+            ledger,
+            max_events,
+            max_attention_items,
+            options=opts,
+            cycle_line=cycle_line,
+            user_message=user_message,
+            recent_messages=recent_messages,
         )
     )
     if include_guidance:
@@ -363,6 +376,8 @@ def inject_prompt(
     *,
     options: InjectionOptions | None = None,
     cycle_line: str = "",
+    user_message: str = "",
+    recent_messages: list[str] | None = None,
 ) -> str:
     return _replace_block(
         prompt or "",
@@ -373,5 +388,7 @@ def inject_prompt(
             rules_text,
             options=options,
             cycle_line=cycle_line,
+            user_message=user_message,
+            recent_messages=recent_messages,
         ),
     )

@@ -187,7 +187,7 @@ def _require_json_object(raw: str) -> dict[str, Any]:
     PLUGIN_NAME,
     "灵犀 · 内心世界",
     "私聊专用的连续情绪、心事、每日回顾与亲密状态系统。",
-    "0.3.34",
+    "0.3.35",
     "https://github.com/gongzhudeng/astrbot_plugin_emotion_state",
 )
 class EmotionStatePlugin(Star):
@@ -621,6 +621,11 @@ class EmotionStatePlugin(Star):
         options = self._injection_options()
         source = request_source(event)
         target = self._injection_target()
+        # 生理期那一句每轮都算（很便宜），未配置时是空串，块与改动前逐字一致。
+        cycle_line = self._cycle_line()
+        # 用户这句话（给「他提起了就注入」用）。多轮回溯成本太高，
+        # 先只给当前句；真要靠历史想起时走 livingmemory 的语义检索（以后接）。
+        user_message = str(getattr(event, "message_str", "") or "").strip()
 
         if target == "system":
             req.system_prompt = inject_prompt(
@@ -630,6 +635,8 @@ class EmotionStatePlugin(Star):
                 max_attention,
                 rules_text,
                 options=options,
+                cycle_line=cycle_line,
+                user_message=user_message,
             )
             snapshot = capture_injection_snapshot(
                 req.system_prompt,
@@ -643,8 +650,6 @@ class EmotionStatePlugin(Star):
 
             system_content = ""
             user_content = ""
-            # 生理期那一句每轮都算（很便宜），未配置时是空串，块与改动前逐字一致。
-            cycle_line = self._cycle_line()
             if target == "split":
                 system_content = build_injection_content(
                     ledger,
@@ -654,6 +659,7 @@ class EmotionStatePlugin(Star):
                     options=options,
                     include_guidance=False,
                     cycle_line=cycle_line,
+                    user_message=user_message,
                 )
                 user_content = build_guidance_part(ledger, options=options)
             else:
@@ -664,6 +670,7 @@ class EmotionStatePlugin(Star):
                     rules_text,
                     options=options,
                     cycle_line=cycle_line,
+                    user_message=user_message,
                 )
 
             if system_content:
@@ -688,6 +695,7 @@ class EmotionStatePlugin(Star):
                     rules_text,
                     options=options,
                     cycle_line=cycle_line,
+                    user_message=user_message,
                 )
                 snapshot = capture_injection_snapshot(
                     req.system_prompt,

@@ -190,3 +190,27 @@ def test_update_due_is_also_reconciled() -> None:
     assert ok, reason
     fixed = updated.attention_items[0].due_at
     assert "2026-11-08" in fixed, fixed
+
+
+def test_dawn_shift_survives_reconciliation() -> None:
+    """凌晨 0-5 点说的「明天」= 睡醒后的那个白天，不是日历上的明天。
+
+    这是人话不是数据：01:30 说「明天提醒我开会」，指的是今天上午，
+    不是明天上午。本地 resolve 有 dawn_shift，校准必须沿用同一条规则，
+    否则会把模型给的日历日期「纠正」成错的那天。
+    """
+    from datetime import timedelta
+
+    from astrbot_plugin_emotion_state.core.attention import reconcile_due_at, resolve_due_at
+
+    cst = timezone(timedelta(hours=8))
+    dawn = datetime(2026, 11, 6, 1, 30, tzinfo=cst)
+
+    # 本地解析：明天 -> 当天白天
+    assert resolve_due_at("明天", dawn).startswith("2026-11-06")
+    # 模型按日历给 11-07，校准后应回到 11-06（保留它给的 09:00）
+    fixed = reconcile_due_at("明天", "2026-11-07T09:00:00+08:00", dawn)
+    assert fixed.startswith("2026-11-06T09:00"), fixed
+    # 白天说「明天」就是日历明天，不受影响
+    noon = datetime(2026, 11, 6, 12, 0, tzinfo=cst)
+    assert reconcile_due_at("明天", "2026-11-07T09:00:00+08:00", noon).startswith("2026-11-07T09:00")

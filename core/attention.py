@@ -1054,8 +1054,11 @@ def should_inject(
             return True  # 解析不出来就当没有约束，宁可多给也别漏
         if due.tzinfo is None:
             due = due.replace(tzinfo=current.tzinfo)
-        # 只有日期（00:00）时，当天 0 点就开始注入——「星期天」是整天的事
-        if due.hour == 0 and due.minute == 0:
+        # 00:00 与 23:59 都是「只有日期」的兜底写法（建项时没给钟点），
+        # 按整天算——「今晚」这种事不能等到 21:59 才出现。
+        if (due.hour == 0 and due.minute == 0) or (
+            due.hour == 23 and due.minute >= 59
+        ):
             return current.date() >= due.date()
         lead = _injection_lead_seconds(item.kind)
         return (due - current).total_seconds() <= lead

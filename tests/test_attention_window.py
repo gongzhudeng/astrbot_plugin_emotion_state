@@ -114,3 +114,11 @@ def test_care_and_overdue_rank_before_window() -> None:
     ]
     picked = select_attention_items(items, 4, now=NOW)
     assert len(picked) == 2
+
+
+def test_end_of_day_due_is_treated_as_whole_day() -> None:
+    """建项没给钟点时 due_at 会兜底成当天 23:59，不能拖到 21:59 才出现。"""
+    tonight = datetime(2026, 11, 6, 23, 59, tzinfo=timezone.utc).isoformat()
+    item = _item("今晚只让我用声音陪着", due_at=tonight, kind="commitment")
+    morning = datetime(2026, 11, 6, 9, 0, tzinfo=timezone.utc)
+    assert should_inject(item, morning)

@@ -122,3 +122,30 @@ def test_end_of_day_due_is_treated_as_whole_day() -> None:
     item = _item("今晚只让我用声音陪着", due_at=tonight, kind="commitment")
     morning = datetime(2026, 11, 6, 9, 0, tzinfo=timezone.utc)
     assert should_inject(item, morning)
+
+
+def test_model_date_is_corrected_by_local_calendar() -> None:
+    """模型把「后天星期天」算成周一；日期以本地日历为准，钟点保留模型的。"""
+    from datetime import timedelta
+
+    from astrbot_plugin_emotion_state.core.attention import reconcile_due_at
+
+    cst = timezone(timedelta(hours=8))
+    friday_night = datetime(2026, 11, 6, 20, 18, tzinfo=cst)
+    fixed = reconcile_due_at("后天星期天", "2026-11-09T09:00:00+08:00", friday_night)
+    assert fixed.startswith("2026-11-08T09:00"), fixed
+
+
+def test_reconcile_keeps_model_time_when_date_matches() -> None:
+    from datetime import timedelta
+
+    from astrbot_plugin_emotion_state.core.attention import reconcile_due_at
+
+    cst = timezone(timedelta(hours=8))
+    friday_night = datetime(2026, 11, 6, 20, 18, tzinfo=cst)
+    # 日期一致：模型给的 15:30 比本地兜底的 23:59 精确，保留
+    keep = reconcile_due_at("星期天", "2026-11-08T15:30:00+08:00", friday_night)
+    assert keep.startswith("2026-11-08T15:30"), keep
+    # 本地解析不出（绝对日期表述）：原样保留
+    raw = "2026-11-20T10:00:00+08:00"
+    assert reconcile_due_at("11月20日上午十点", raw, friday_night) == raw

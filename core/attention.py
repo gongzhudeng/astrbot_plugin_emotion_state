@@ -605,6 +605,50 @@ def _premature_complete_rejection(
     return None
 
 
+def reconcile_due_at(time_hint: str, model_due: str, now: datetime | None = None) -> str:
+    """用本地时间解析校准模型给的绝对日期。
+
+    模型算日期是弱项：2026-11-06（周五）的「后天星期天」，它给出 11-09（周一）。
+    prompt 里明写了「当前日期时间：2026-11-06 20:18（周五）」，它照样错一天。
+    原因是日期推演要在 token 之间做进位，模型没有日历概念。
+
+    而 ``resolve_due_at`` 用真实日历算，是准的。所以分工：
+    **日期信代码，钟点信模型**。
+
+    - ``time_hint`` 解析不出 → 保留模型给的（可能是「11月8日下午三点」这种绝对表述）；
+    - 两者日期一致 → 保留模型的（它可能给了更精确的钟点）；
+    - 日期不一致 → 用代码算的日期，保留模型的时分。
+    """
+    text = str(time_hint or "").strip()
+    candidate = str(model_due or "").strip()
+    if not text:
+        return candidate
+    try:
+        resolved = resolve_due_at(text, now)
+    except (TypeError, ValueError):
+        return candidate
+    if not resolved:
+        return candidate
+    try:
+        resolved_moment = parse_time(resolved)
+    except (TypeError, ValueError):
+        return candidate
+    if not candidate:
+        return resolved
+    try:
+        model_moment = parse_time(candidate)
+    except (TypeError, ValueError):
+        return resolved
+    if resolved_moment.date() == model_moment.date():
+        return candidate
+    corrected = model_moment.replace(
+        year=resolved_moment.year,
+        month=resolved_moment.month,
+        day=resolved_moment.day,
+    )
+    return corrected.isoformat()
+
+
 def apply_attention_observation(
     ledger: StateLedger,
     observation: AttentionObservation,
@@ -674,7 +718,7 @@ def apply_attention_observation(
             status=observation.status,
             actor=observation.actor,
             time_hint=observation.time_hint,
-            due_at=observation.due_at or resolve_due_at(observation.time_hint),
+            due_at=reconcile_due_at(observation.time_hint, observation.due_at),
             confidence=observation.confidence,
             explicit=observation.explicit,
             source=observation.source,

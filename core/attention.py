@@ -36,7 +36,10 @@ _PREMATURE_COMPLETE_GUARD_HOURS = 3.0
 # 那是当天的事，不该拦到晚上。
 _EXPLICIT_PERIOD_CUES = re.compile(
     r"下午|傍晚|晚上|今晚|今夜|夜里|睡前|凌晨|"
-    r"明晚|明早|明天|后天|大后天|周[一二三四五六日天]|下周|下个月"
+    r"明晚|明早|明天|后天|大后天|"
+    # 「周X」和「星期X」都要认：2026-11-06 的「星期天提醒充电」因为只写了周X，
+    # 守门认不出这是将来时段，建项 21 分钟就被「我记着呢」关掉了。
+    r"周[一二三四五六日天]|星期[一二三四五六日天]|下周|下个月"
 )
 # Sources trusted to mutate attention items. ``local_catch`` is the zero-cost
 # catch for explicit reminder wording and never depends on a model call.
@@ -637,6 +640,14 @@ def apply_attention_observation(
     if observation.action == "complete" and current is not None:
         if not completion_evidence_matches_item(current, observation.evidence_quote):
             return ledger, False, "unrelated_completion_evidence"
+        # v0.3.36: 「提醒型」事项（remember）的完成证据必须来自用户。
+        # 她自己的「知道啦，我记着呢，到点提醒你」只能证明**答应**了，
+        # 不能证明提醒已经发生——2026-11-06 的「星期天提醒充电」就是被这句话
+        # 在建项 21 分钟后关掉的，用户看到的现象是「说了两遍记得也没建」。
+        if observation.source != "webui" and current.kind == "remember":
+            speaker = str(observation.evidence_speaker or "").strip().lower()
+            if speaker == "assistant":
+                return ledger, False, "reminder_acknowledged_not_delivered"
         # v0.3.25: code-level gate — an item whose due_at is still hours away
         # has no trustworthy completion evidence yet; model-suggested closes
         # get skipped until the window is near. Human webui edits stay exempt.

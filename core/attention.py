@@ -755,9 +755,13 @@ def apply_attention_observation(
                     current.content
                 )
             current.time_hint = observation.time_hint or current.time_hint
+            # 改时间也要过同一道校准：模型在 update 里同样会把日期算错，
+            # 只在 create 校验等于留了一半的洞。
             current.due_at = normalize_due_at(
-                observation.due_at
-                or current.due_at
+                reconcile_due_at(
+                    current.time_hint,
+                    observation.due_at or current.due_at,
+                )
                 or resolve_due_at(current.time_hint)
             )
             current.confidence = max(current.confidence, observation.confidence)

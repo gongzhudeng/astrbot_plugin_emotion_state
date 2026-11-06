@@ -149,3 +149,44 @@ def test_reconcile_keeps_model_time_when_date_matches() -> None:
     # 本地解析不出（绝对日期表述）：原样保留
     raw = "2026-11-20T10:00:00+08:00"
     assert reconcile_due_at("11月20日上午十点", raw, friday_night) == raw
+
+
+def test_update_due_is_also_reconciled() -> None:
+    """改时间也要校准，不然只堵了 create 一半的洞。"""
+    from astrbot_plugin_emotion_state.core.attention import apply_attention_observation
+    from astrbot_plugin_emotion_state.core.models import AttentionObservation, StateLedger
+
+    ledger, ok, reason = apply_attention_observation(
+        StateLedger(user_key="private:upd"),
+        AttentionObservation(
+            action="create",
+            content="星期天提醒我充电",
+            kind="remember",
+            time_hint="后天",
+            confidence=0.9,
+            explicit=True,
+            source="attention_review",
+            evidence_quote="记得提醒我后天充电",
+            evidence_speaker="user",
+        ),
+    )
+    assert ok, reason
+    item = ledger.attention_items[0]
+
+    updated, ok, reason = apply_attention_observation(
+        ledger,
+        AttentionObservation(
+            action="update",
+            item_id=item.id,
+            item_version=item.version,
+            time_hint="星期天",
+            due_at="2026-11-09T09:00:00+08:00",  # 模型又算成周一
+            confidence=0.9,
+            source="attention_review",
+            evidence_quote="那就星期天提醒吧",
+            evidence_speaker="user",
+        ),
+    )
+    assert ok, reason
+    fixed = updated.attention_items[0].due_at
+    assert "2026-11-08" in fixed, fixed

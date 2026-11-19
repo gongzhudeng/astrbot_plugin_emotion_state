@@ -187,7 +187,7 @@ def _require_json_object(raw: str) -> dict[str, Any]:
     PLUGIN_NAME,
     "灵犀 · 内心世界",
     "私聊专用的连续情绪、心事、每日回顾与亲密状态系统。",
-    "0.3.40",
+    "0.3.41",
     "https://github.com/gongzhudeng/astrbot_plugin_emotion_state",
 )
 class EmotionStatePlugin(Star):
@@ -2198,12 +2198,6 @@ class EmotionStatePlugin(Star):
     async def _settle_proactive_state(self, user_key: str) -> StateLedger:
         snapshot = await self._spark_snapshot(user_key)
         if not snapshot.get("available"):
-            # v0.3.40: 静置结算从没生效（proactive_evidence_progress 一直是空的），
-            # 但这里静默返回，看不出是「没装 Spark」还是「取不到它的状态」。
-            # 留一条 debug，下次排查不用再猜。
-            logger.debug(
-                "[EmotionState] proactive snapshot unavailable for %s", user_key
-            )
             return await self.service.get(user_key, settle=False)
         now_ts = datetime.now().astimezone().timestamp()
         evidence = snapshot.get("evidence")

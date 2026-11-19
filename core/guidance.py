@@ -230,15 +230,6 @@ def build_guidance_prompt(
             reverse=True,
         )[:3]
     ]
-    # v0.3.40：他多久没说话。原来材料里没有这个数字，表达建议就算想「他晾着我」
-    # 也无从判断——只能看到心情，说不出缘由。
-    silent_minutes = 0
-    try:
-        last_ts = float(getattr(ledger, "last_user_message_ts", 0.0) or 0.0)
-        if last_ts > 0:
-            silent_minutes = max(0, int((now.timestamp() - last_ts) / 60))
-    except (TypeError, ValueError, OSError):
-        silent_minutes = 0
     payload = {
         "time_band": time_band(now),
         "baseline_label": ledger.mood.label,
@@ -247,7 +238,6 @@ def build_guidance_prompt(
         "short_term_offset": round(ledger.mood_offset.valence, 2),
         "today_temperament": ledger.today_temperament.word,
         "top_events": top_events,
-        "silent_minutes": silent_minutes,
         "jealousy_intensity": round(ledger.jealousy.intensity, 2)
         if ledger.jealousy.confidence >= 0.55
         else 0.0,
@@ -293,20 +283,6 @@ def build_guidance_prompt(
         "先关心一句再聊别的；但关心必须用这个角色自己的说话方式——嘴上不饶人、"
         "边损边问也是关心，不要变成客服式问候（“注意身体哦”“要好好照顾自己”）。"
         "材料里没有这类事就不要硬找，不要编造。"
-        "\n- **有话直接说，别憋着让人猜**：材料里出现下面这些情况时，can_say 要建议"
-        "把缘由明说出来——可以带气、可以损他，但**不冷处理、不阴阳怪气、不让他自己反省**；"
-        "说的时候落到具体那件事上，不上升到人品，不说教。"
-        "\n  · 他很久没回消息（看 material 里的 silent_minutes，尤其我先找过他）："
-        "直接说被晾着不舒服，点出多久没动静，别翻旧账。"
-        "\n  · 他敷衍（连着「嗯」「哦」「好」这类）：直接点出来「你这是在敷衍我」，"
-        "把不高兴放在明面上，不要假装没事。"
-        "\n  · 他提到别的女生、看美女：直接说不高兴、问清楚，但不审问、不查岗。"
-        "\n  · 他答应的事没做：翻出来说，只翻这一件，不叠旧账。"
-        "\n  · 他熬夜、不吃饭、硬撑：心疼包在念叨里，说具体「几点了还不睡」，"
-        "不要「注意身体」这种。"
-        "\n  材料里没有对应信号就不要硬找，也不要把这几种一次全上——一次只挑最明显的那个。"
-        "\n- `silent_minutes` 是「他距上次说话过了多少分钟」，自己换算成话说（「你这一下午都没影」），"
-        "不要把数字照抄出来。"
         "\n- 只提供方向、原因和分寸，不要写具体台词或原话，也不要照抄材料里的句子；"
         "具体怎么说由角色的人格和说话习惯自己决定。"
         f"\n- 每个字段不超过 {max(20, int(max_chars))} 字，宁短勿长。"

@@ -1382,7 +1382,7 @@ def test_plugin_version_matches_metadata() -> None:
     registered = re.search(r'@register\((?:[^)]*\n)*?\s*"([^"]+)",\n\s*"https', main_source)
     assert registered is not None, "could not locate the @register version"
     assert registered.group(1) == declared
-    assert declared == "0.3.40"
+    assert declared == "0.3.41"
 
 
 def test_guidance_prompt_pins_speaker_names() -> None:
@@ -1518,20 +1518,3 @@ async def test_review_prompt_separates_doing_from_done() -> None:
     assert "**承诺与预告一律不算完成证据**" in prompt
     # And the item under review really is present in the prompt.
     assert "晚上我要拍白丝视频给他当生日礼物" in prompt
-
-
-def test_guidance_material_carries_silence_minutes() -> None:
-    """表达建议要能看出「他多久没说话」，否则「被晾」这条规则无据可依。"""
-    from datetime import datetime, timedelta, timezone
-
-    from astrbot_plugin_emotion_state.core.guidance import build_guidance_prompt
-    from astrbot_plugin_emotion_state.core.models import StateLedger
-
-    now = datetime(2026, 11, 19, 23, 0, tzinfo=timezone.utc)
-    ledger = StateLedger(user_key="private:silence")
-    ledger.last_user_message_ts = (now - timedelta(minutes=185)).timestamp()
-    prompt = build_guidance_prompt(ledger, now=now)
-    assert '"silent_minutes": 185' in prompt
-    # 规则本身也在
-    assert "silent_minutes" in prompt
-    assert "不冷处理、不阴阳怪气" in prompt

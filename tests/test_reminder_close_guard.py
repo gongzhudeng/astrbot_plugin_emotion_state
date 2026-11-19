@@ -19,7 +19,8 @@ def _created(**overrides) -> StateLedger:
         "content": "星期天提醒Mando给电动车充电",
         "kind": "remember",
         "time_hint": "星期天",
-        "due_at": "2026-11-09T09:00:00+08:00",
+        # 相对现在三天后：写死日期会在那天之后变成「过去的截止时间」被拒
+        "due_at": (datetime.now(timezone.utc) + timedelta(days=3)).isoformat(),
         "confidence": 0.95,
         "explicit": True,
         "source": "attention_review",
@@ -72,7 +73,7 @@ def test_user_confirmation_still_closes_after_due_passes() -> None:
 
 def test_weekday_wording_counts_as_a_pending_period() -> None:
     """「星期天」必须被守门认成将来时段（原来只写了周X，覆盖不到）。"""
-    ledger = _created(due_at="2026-11-09T09:00:00+08:00")
+    ledger = _created(due_at=(datetime.now(timezone.utc) + timedelta(days=3)).isoformat())
     item = ledger.attention_items[0]
     close = AttentionObservation(
         action="complete",

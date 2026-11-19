@@ -180,7 +180,7 @@ def test_update_due_is_also_reconciled() -> None:
             item_id=item.id,
             item_version=item.version,
             time_hint="星期天",
-            due_at="2026-11-09T09:00:00+08:00",  # 模型又算成周一
+            due_at="2026-11-09T09:00:00+08:00",  # 模型给了一个错日期，由本地校准
             confidence=0.9,
             source="attention_review",
             evidence_quote="那就星期天提醒吧",
@@ -189,7 +189,10 @@ def test_update_due_is_also_reconciled() -> None:
     )
     assert ok, reason
     fixed = updated.attention_items[0].due_at
-    assert "2026-11-08" in fixed, fixed
+    # 不写死具体日期（会随运行日期失效）：只要落在周日本身就说明校准生效
+    from datetime import datetime as _dt
+
+    assert _dt.fromisoformat(fixed).weekday() == 6, fixed
 
 
 def test_dawn_shift_survives_reconciliation() -> None:

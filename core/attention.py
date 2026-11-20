@@ -570,6 +570,8 @@ def _names_pending_period(item: AttentionItem) -> bool:
 def _premature_complete_rejection(
     item: AttentionItem,
     guard_hours: float,
+    *,
+    evidence_speaker: str = "",
 ) -> str | None:
     """Reject completes whose promised window has not even started.
 
@@ -581,6 +583,10 @@ def _premature_complete_rejection(
     v0.3.30: an item whose wording names no period ("今天点外卖", "待会拍一段")
     is released even when due_at is still hours away — its due_at is only the
     end-of-day default, not a promise about when the action may happen.
+
+    v0.3.44: 用户本人说的话不受这条约束。这道门防的是「她自己答应了就当做到」
+    （v0.3.36 那次「我记着呢」），不防用户。用户周六说「星期天那个我已经充了、
+    不用提醒」，那是真的提前完成，拦住它只会让提醒照常触发。
     """
     try:
         guard = float(guard_hours)
@@ -600,6 +606,8 @@ def _premature_complete_rejection(
         return None
     if remaining > timedelta(hours=guard):
         if not _names_pending_period(item):
+            return None
+        if str(evidence_speaker or "").strip().lower() == "user":
             return None
         return "premature_completion_before_due"
     return None
@@ -701,7 +709,11 @@ def apply_attention_observation(
                 if premature_complete_guard_hours is None
                 else premature_complete_guard_hours
             )
-            rejection = _premature_complete_rejection(current, guard)
+            rejection = _premature_complete_rejection(
+                current,
+                guard,
+                evidence_speaker=observation.evidence_speaker,
+            )
             if rejection:
                 return ledger, False, rejection
     if observation.action == "create" and current is None and not observation.content:

@@ -72,21 +72,29 @@ def test_user_confirmation_still_closes_after_due_passes() -> None:
 
 
 def test_weekday_wording_counts_as_a_pending_period() -> None:
-    """「星期天」必须被守门认成将来时段（原来只写了周X，覆盖不到）。"""
-    ledger = _created(due_at=(datetime.now(timezone.utc) + timedelta(days=3)).isoformat())
-    item = ledger.attention_items[0]
-    close = AttentionObservation(
-        action="complete",
-        item_id=item.id,
-        item_version=item.version,
+    """「星期天」必须被守门认成将来时段（原来只写了周X，覆盖不到）。
+
+    v0.3.44 起用户本人的话豁免这道门，所以直接测守门函数本身，
+    不再借 apply 走一遍。
+    """
+    from astrbot_plugin_emotion_state.core.attention import _premature_complete_rejection
+
+    item = _item_with_future_weekday()
+    assert _premature_complete_rejection(item, 3.0) == "premature_completion_before_due"
+
+
+def _item_with_future_weekday():
+    from astrbot_plugin_emotion_state.core.models import AttentionItem
+
+    return AttentionItem(
+        content="星期天提醒Mando给电动车充电",
+        kind="remember",
+        status="open",
+        explicit=True,
         confidence=0.9,
-        source="attention_review",
-        evidence_quote="我已经充好了，不用提醒了",
-        evidence_speaker="user",
+        time_hint="星期天",
+        due_at=(datetime.now(timezone.utc) + timedelta(days=3)).isoformat(),
     )
-    _, ok, reason = apply_attention_observation(ledger, close)
-    assert not ok
-    assert reason == "premature_completion_before_due"
 
 
 def test_plan_items_are_not_affected() -> None:
@@ -105,3 +113,38 @@ def test_plan_items_are_not_affected() -> None:
     )
     _, ok, reason = apply_attention_observation(ledger, close)
     assert ok, reason
+
+
+def test_user_words_beat_the_premature_guard() -> None:
+    """周六说「星期天那个我已经充了、不用提醒」，要能关掉，否则到点还提醒。"""
+    ledger = _created()
+    item = ledger.attention_items[0]
+    close = AttentionObservation(
+        action="complete",
+        item_id=item.id,
+        item_version=item.version,
+        confidence=0.9,
+        source="attention_review",
+        evidence_quote="星期天那个不用提醒我了，我已经自己去充电了",
+        evidence_speaker="user",
+    )
+    _, ok, reason = apply_attention_observation(ledger, close)
+    assert ok, reason
+
+
+def test_her_own_words_still_blocked_when_far_from_due() -> None:
+    """她自己的「我记着呢」依旧不能关——这是 v0.3.36 的教训。"""
+    ledger = _created()
+    item = ledger.attention_items[0]
+    close = AttentionObservation(
+        action="complete",
+        item_id=item.id,
+        item_version=item.version,
+        confidence=0.8,
+        source="attention_review",
+        evidence_quote="知道啦，我记着呢，到点提醒你",
+        evidence_speaker="assistant",
+    )
+    _, ok, reason = apply_attention_observation(ledger, close)
+    assert not ok
+    assert reason == "reminder_acknowledged_not_delivered"

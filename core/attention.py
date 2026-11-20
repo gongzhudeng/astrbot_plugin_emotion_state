@@ -978,6 +978,10 @@ INJECTION_LEAD_SECONDS = {
     "care": 0,
 }
 
+#: 主动提醒之后的静默期（秒）：这段时间里这条不再挂进上下文，
+#: 免得她刚说完「该充电了」，下一轮又提一次。他主动问起时不受限。
+_REMINDER_SILENCE_SECONDS = 30 * 60
+
 #: 从内容里抽关键词时要丢掉的虚词/动词/时间词。抽出来的名词才适合当「提到没」的判据。
 _MENTION_STOPWORDS = frozenset({
     "我们", "你们", "他们", "她们", "自己", "这个", "那个", "这些", "那些",
@@ -1099,13 +1103,23 @@ def should_inject(
     # 1. care 不是「将来的事」，一直注入
     if item.kind == "care":
         return True
-    # 2. 逾期未完成：这时候最该催，不受窗口限制
-    if is_attention_overdue(item, current):
-        return True
-    # 3. 他主动提起了：立即注入，不然就是失忆
+    # 2. 他主动提起了：立即注入，不然就是失忆
     if is_mentioned(item, user_message, recent_messages):
         return True
-    # 4. 有明确时间：只在窗口内出现
+    # 3. 刚被主动提醒过：短时间内别再挂进上下文，否则她刚说完又会说一遍
+    if item.notified_at:
+        try:
+            notified = parse_time(item.notified_at)
+            if notified.tzinfo is None:
+                notified = notified.replace(tzinfo=current.tzinfo)
+            if (current - notified).total_seconds() < _REMINDER_SILENCE_SECONDS:
+                return False
+        except (TypeError, ValueError):
+            pass
+    # 4. 逾期未完成：这时候最该催，不受窗口限制
+    if is_attention_overdue(item, current):
+        return True
+    # 5. 有明确时间：只在窗口内出现
     if item.due_at:
         try:
             due = parse_time(item.due_at)
@@ -1121,5 +1135,88 @@ def should_inject(
             return current.date() >= due.date()
         lead = _injection_lead_seconds(item.kind)
         return (due - current).total_seconds() <= lead
-    # 5. 无明确时间：保持现状（一直注入）
+    # 6. 无明确时间：保持现状（一直注入）
     return True
+
+
+# ---------------------------------------------------------------------------
+# 主动提醒（v0.3.42）：到点了就开口，而不是等他说话才带一句
+#
+# 与注入的关系：注入回答「这轮聊天要不要提到它」，提醒回答「要不要主动开口」。
+# 两条路共用 notified_at：提醒过后 30 分钟内不再注入（should_inject 第 3 条）。
+# ---------------------------------------------------------------------------
+
+
+def due_reminder_candidates(
+    items: list[AttentionItem],
+    now: datetime | None = None,
+    *,
+    kinds: tuple[str, ...] = ("remember",),
+    max_count: int = 2,
+    interval_minutes: float = 30.0,
+) -> list[AttentionItem]:
+    """到点、该提醒、且还没提够次数的事项，按到期时间升序。
+
+    刻意比 `select_attention_items` 更保守：只收**已到点**的（不是临近窗口），
+    因为主动开口的打扰成本比上下文里多一行高得多。
+    """
+    current = now or utc_now()
+    allowed = tuple(str(k) for k in kinds if str(k))
+    limit_count = max(1, int(max_count))
+    interval = max(0.0, float(interval_minutes)) * 60.0
+    picked: list[AttentionItem] = []
+    for item in items:
+        if item.status != "open" or not item.explicit:
+            continue
+        if item.kind not in allowed or item.kind == "care":
+            continue
+        if not item.due_at or is_short_lived_attention(item):
+            continue
+        if item.confidence < 0.62:
+            continue
+        try:
+            due = parse_time(item.due_at)
+        except (TypeError, ValueError):
+            continue
+        if due.tzinfo is None:
+            due = due.replace(tzinfo=current.tzinfo)
+        if current < due:
+            continue
+        if item.notify_count >= limit_count:
+            continue
+        if item.notified_at:
+            try:
+                last = parse_time(item.notified_at)
+            except (TypeError, ValueError):
+                last = None
+            if last is not None:
+                if last.tzinfo is None:
+                    last = last.replace(tzinfo=current.tzinfo)
+                if (current - last).total_seconds() < interval:
+                    continue
+        picked.append(item)
+    return sorted(picked, key=lambda row: row.due_at)
+
+
+def mark_reminded(
+    ledger: StateLedger, item_id: str, now: datetime | None = None
+) -> tuple[StateLedger, bool]:
+    """在事项上记一次主动提醒。返回 (新账本, 是否真的改了)。
+
+    调用方应该在**发出消息之前**调用它：先占位再发，避免两个 tick 同时命中同一条。
+    发失败就把账本丢掉不用回滚——少提一次可以接受，重复提才烦人。
+    """
+    target = str(item_id or "").strip()
+    if not target:
+        return ledger, False
+    updated = _copy_ledger(ledger)
+    for item in updated.attention_items:
+        if item.id != target:
+            continue
+        stamp = (now or utc_now()).isoformat()
+        item.notified_at = stamp
+        item.notify_count = max(0, int(item.notify_count)) + 1
+        item.updated_at = stamp
+        item.version = max(1, int(item.version)) + 1
+        return updated, True
+    return ledger, False

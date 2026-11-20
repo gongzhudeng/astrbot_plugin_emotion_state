@@ -302,6 +302,10 @@ class AttentionItem:
     last_evidence_at: str = field(default_factory=iso_now)
     completed_at: str = ""
     archived_at: str = ""
+    # v0.3.42：主动提醒的记账。只被「要不要提醒 / 要不要注入」读，
+    # 不参与任何情绪判定，也不出现在注入文本里。
+    notified_at: str = ""
+    notify_count: int = 0
     version: int = 1
     evidence: list[EventTrace] = field(default_factory=list)
 

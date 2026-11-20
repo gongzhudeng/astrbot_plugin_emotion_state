@@ -24,9 +24,11 @@ from .core.attention import (
     attention_exclusion_reason,
     attention_kind_label,
     attention_status_label,
+    due_reminder_candidates,
     format_attention_timing,
     is_attention_overdue,
     is_open_attention,
+    mark_reminded,
     normalize_attention_content,
     select_attention_items,
 )
@@ -187,7 +189,7 @@ def _require_json_object(raw: str) -> dict[str, Any]:
     PLUGIN_NAME,
     "灵犀 · 内心世界",
     "私聊专用的连续情绪、心事、每日回顾与亲密状态系统。",
-    "0.3.41",
+    "0.3.42",
     "https://github.com/gongzhudeng/astrbot_plugin_emotion_state",
 )
 class EmotionStatePlugin(Star):
@@ -243,6 +245,10 @@ class EmotionStatePlugin(Star):
         self.context._emotion_state_get_prompt_context = self._prompt_context
         self.context._emotion_state_get_live_context = self._live_context
         self.context._emotion_state_cycle_context = self._cycle_context
+        # v0.3.42: 主动提醒。Spark 每轮 tick 问一次「有没有到点该开口的」，
+        # 发出去之前先标记，避免同一条被两个 tick 同时命中。
+        self.context._emotion_state_due_reminders = self._due_reminders
+        self.context._emotion_state_mark_reminded = self._mark_reminded
         self.cycle_file = self.data_dir / "cycle.json"
         self._register_web_apis()
 
@@ -723,6 +729,75 @@ class EmotionStatePlugin(Star):
             options=self._injection_options(),
             cycle_line=self._cycle_line(),
         )
+
+    async def _due_reminders(
+        self,
+        user_key: str,
+        kinds: Any = None,
+        max_count: int = 2,
+        interval_minutes: float = 30.0,
+    ) -> list[dict[str, Any]]:
+        """给主动提醒用：此刻已到点、且还没提够次数的事项（只读）。
+
+        与 ``_prompt_context`` 的分工：那个回答「这轮聊天要不要提到它」，
+        这个回答「要不要主动开口」。主动开口的打扰成本高得多，所以只收
+        已到点的，不提前置窗口。
+        """
+        key = str(user_key or "").strip()
+        if not key or not self._config("enabled", True):
+            return []
+        kind_tuple = (
+            tuple(str(item) for item in kinds if str(item).strip())
+            if isinstance(kinds, (list, tuple, set))
+            else ("remember",)
+        )
+        if not kind_tuple:
+            return []
+        try:
+            ledger = await self.service.get(key, settle=False)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[EmotionState] 查询待提醒事项失败(%s): %s", key, exc)
+            return []
+        items = due_reminder_candidates(
+            ledger.attention_items,
+            kinds=kind_tuple,
+            max_count=max_count,
+            interval_minutes=interval_minutes,
+        )
+        return [
+            {
+                "id": item.id,
+                "content": item.content,
+                "kind": item.kind,
+                "due_at": item.due_at,
+                "time_hint": item.time_hint,
+                "notify_count": int(item.notify_count),
+            }
+            for item in items
+        ]
+
+    async def _mark_reminded(self, user_key: str, item_id: str) -> bool:
+        """记一次已提醒。调用方应在**发出消息之前**调用，先占位再发。"""
+        key = str(user_key or "").strip()
+        target = str(item_id or "").strip()
+        if not key or not target:
+            return False
+
+        def mutate(current: StateLedger) -> StateLedger:
+            updated, _ = mark_reminded(current, target)
+            return updated
+
+        try:
+            _, changed = await self.service.mutate_if_changed(
+                key,
+                "attention_reminder_sent",
+                mutate,
+                {"item_id": target},
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[EmotionState] 标记已提醒失败(%s): %s", key, exc)
+            return False
+        return bool(changed)
 
     @staticmethod
     def _schedule_summary(value: str) -> str:

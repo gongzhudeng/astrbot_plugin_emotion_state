@@ -950,9 +950,13 @@ def attention_exclusion_reason(
     threshold = 0.62 if item.status == "open" else 0.72
     if item.confidence < threshold:
         return "证据不足"
-    # 有明确时间、但此刻不在窗口内：不是「不合格」，是「还不到时候」
-    if item.due_at and not should_inject(item, now, user_message, recent_messages):
-        return "还未到时间"
+    # 有明确时间、但此刻不在窗口内：不是「不合格」，是「还不到时候」。
+    # 刚被主动提醒过也走这里，但原因不同，别混成一句「还未到时间」。
+    if not should_inject(item, now, user_message, recent_messages):
+        if _reminder_silence_active(item, now):
+            return "刚提醒过，暂时不重复"
+        if item.due_at:
+            return "还未到时间"
     if limit_reached:
         return "被条数上限挤掉"
     return ""
@@ -1088,6 +1092,25 @@ def _injection_lead_seconds(kind: str) -> int:
     return int(INJECTION_LEAD_SECONDS.get(kind, 2 * 3600))
 
 
+def _reminder_silence_active(item: AttentionItem, now: datetime | None = None) -> bool:
+    """刚被主动提醒过、还在静默期内。
+
+    判定与面板文案共用这一个函数：两处各写一套，迟早会漂移成
+    「面板说还没到时间，实际是刚提醒过」。
+    """
+    stamp = str(getattr(item, "notified_at", "") or "").strip()
+    if not stamp:
+        return False
+    current = now or utc_now()
+    try:
+        notified = parse_time(stamp)
+    except (TypeError, ValueError):
+        return False
+    if notified.tzinfo is None:
+        notified = notified.replace(tzinfo=current.tzinfo)
+    return (current - notified).total_seconds() < _REMINDER_SILENCE_SECONDS
+
+
 def should_inject(
     item: AttentionItem,
     now: datetime | None = None,
@@ -1107,15 +1130,8 @@ def should_inject(
     if is_mentioned(item, user_message, recent_messages):
         return True
     # 3. 刚被主动提醒过：短时间内别再挂进上下文，否则她刚说完又会说一遍
-    if item.notified_at:
-        try:
-            notified = parse_time(item.notified_at)
-            if notified.tzinfo is None:
-                notified = notified.replace(tzinfo=current.tzinfo)
-            if (current - notified).total_seconds() < _REMINDER_SILENCE_SECONDS:
-                return False
-        except (TypeError, ValueError):
-            pass
+    if _reminder_silence_active(item, current):
+        return False
     # 4. 逾期未完成：这时候最该催，不受窗口限制
     if is_attention_overdue(item, current):
         return True
@@ -1217,6 +1233,7 @@ def mark_reminded(
         item.notified_at = stamp
         item.notify_count = max(0, int(item.notify_count)) + 1
         item.updated_at = stamp
-        item.version = max(1, int(item.version)) + 1
+        # 刻意不动 version：它是对外的乐观锁版本，复核拿着旧版本号回来时
+        # 会因为「版本已过期」被拒。提醒只是内部记账，不该让别人的操作失败。
         return updated, True
     return ledger, False

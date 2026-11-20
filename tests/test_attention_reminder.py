@@ -80,7 +80,8 @@ def test_mark_reminded_records_without_touching_status() -> None:
     assert after.status == "open"
     assert after.notified_at
     assert after.notify_count == 1
-    assert after.version == before.version + 1
+    # 不动对外版本号：否则复核拿旧版本回来会被判「版本已过期」
+    assert after.version == before.version
     # 原账本没被改（服务层靠 to_dict 比较判断要不要落盘）
     assert ledger.attention_items[0].notify_count == 0
 

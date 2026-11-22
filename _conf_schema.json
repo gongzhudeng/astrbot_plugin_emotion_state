@@ -707,6 +707,17 @@
     },
     "default": 20.0
   },
+  "attention_due_jitter_minutes": {
+    "description": "待关注事项 · 整点提醒的随机浮动（分钟）",
+    "hint": "due 落在整点或半点时，往后随机错开 1~N 分钟，免得每次都掐着 15:00:00 开口、太像机器。0=不浮动。只影响新建和改时间，已有事项不动。",
+    "type": "float",
+    "slider": {
+      "min": 0,
+      "max": 30,
+      "step": 1
+    },
+    "default": 10.0
+  },
   "attention_extra_create_rules": {
     "description": "待关注事项 · 自定义建项规则（追加）",
     "hint": "追加到「待关注事项补建」任务的最末尾，用自然语言写你想让她多建或少建什么（例如「我说身体不舒服时要建 care」）。留空表示不加。与内置规则冲突时以这里为准。",

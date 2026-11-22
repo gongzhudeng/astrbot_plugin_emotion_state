@@ -24,6 +24,7 @@ from .core.attention import (
     attention_exclusion_reason,
     attention_kind_label,
     attention_status_label,
+    configure_due_jitter,
     configure_injection_lead,
     due_reminder_candidates,
     format_attention_timing,
@@ -190,7 +191,7 @@ def _require_json_object(raw: str) -> dict[str, Any]:
     PLUGIN_NAME,
     "灵犀 · 内心世界",
     "私聊专用的连续情绪、心事、每日回顾与亲密状态系统。",
-    "0.3.45",
+    "0.3.46",
     "https://github.com/gongzhudeng/astrbot_plugin_emotion_state",
 )
 class EmotionStatePlugin(Star):
@@ -456,6 +457,8 @@ class EmotionStatePlugin(Star):
         # v0.3.45：注入提前量统一可配（默认 20 分钟）。以前 commitment 提前 2 小时，
         # 中午聊天时下午的事已经挂在上下文里，角色会提前半天念叨。
         configure_injection_lead(self._float_config("attention_lead_minutes", 20.0))
+        # v0.3.46：整点提醒往后错 1~N 分钟，别总是掐着 15:00:00 开口。
+        configure_due_jitter(self._float_config("attention_due_jitter_minutes", 10.0))
         if self._config("daily_settlement_enabled", False):
             self._settlement_task = asyncio.create_task(self._settlement_loop())
         if self._config("proactive_silence_enabled", True):
@@ -1846,7 +1849,7 @@ class EmotionStatePlugin(Star):
             '- 用户当下的身体或情绪状态（只收真正需要关心的，见下）\n'
             "- **写 due_at 的时段对照（不要自己另编）**：凌晨=05:00、早上=08:00、"
             "上午=10:00、中午=12:00、下午=15:00、傍晚=18:00、晚上=20:00、"
-            "睡前=23:00；只说了日期、没说时段的，填当天 23:59。\n"
+            "睡前=次日 00:30（跨过零点了，写明天的日期）；只说了日期、没说时段的，填当天 23:59。\n"
             '- **先看上面的清单再决定**：同一件事（同一个人、同一个活动）如果已经在'
             "清单里，哪怕措辞不一样、时间说法变了，也**不要 create**——"
             '用 action="update" 把那一行的时间改到新说法。'

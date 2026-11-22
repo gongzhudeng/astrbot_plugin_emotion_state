@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import random
 import re
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -191,9 +192,24 @@ def resolve_due_at(time_hint: str, now: datetime | None = None) -> str:
     day_offsets = (("大后天", 3), ("后天", 2), ("明天", 1), ("明晚", 1), ("明早", 1))
     for cue, offset in day_offsets:
         if cue in text:
-            return due(True, days=max(offset - dawn_shift, 0))
+            days = max(offset - dawn_shift, 0)
+            # v0.3.46：「睡前」不是 23:59，是当晚跨过零点之后（00:30）。
+            # 「明天睡前」= 明天夜里 → 后天的 00:30。
+            if "睡前" in text:
+                return (
+                    (anchor + timedelta(days=days + 1))
+                    .replace(hour=0, minute=30, second=0, microsecond=0)
+                    .isoformat()
+                )
+            return due(True, days=days)
     if re.search(r"今晚|今夜|今天|当晚", text):
         return due(True)
+    if "睡前" in text and "明天" not in text and "后天" not in text:
+        return (
+            (anchor + timedelta(days=1))
+            .replace(hour=0, minute=30, second=0, microsecond=0)
+            .isoformat()
+        )
     if (
         re.search(r"(?<!明)(?<!大)晚上|夜里|睡前", text)
         and "明天" not in text
@@ -742,7 +758,9 @@ def apply_attention_observation(
             status=observation.status,
             actor=observation.actor,
             time_hint=observation.time_hint,
-            due_at=reconcile_due_at(observation.time_hint, observation.due_at),
+            due_at=jitter_due_at(
+                reconcile_due_at(observation.time_hint, observation.due_at)
+            ),
             confidence=observation.confidence,
             explicit=observation.explicit,
             source=observation.source,
@@ -782,11 +800,13 @@ def apply_attention_observation(
             # 改时间也要过同一道校准：模型在 update 里同样会把日期算错，
             # 只在 create 校验等于留了一半的洞。
             current.due_at = normalize_due_at(
-                reconcile_due_at(
-                    current.time_hint,
-                    observation.due_at or current.due_at,
+                jitter_due_at(
+                    reconcile_due_at(
+                        current.time_hint,
+                        observation.due_at or current.due_at,
+                    )
+                    or resolve_due_at(current.time_hint)
                 )
-                or resolve_due_at(current.time_hint)
             )
             current.confidence = max(current.confidence, observation.confidence)
         elif observation.action in {"complete", "cancel", "supersede"}:
@@ -1133,6 +1153,42 @@ def configure_injection_lead(minutes: float | None) -> None:
         _lead_override_seconds = None
         return
     _lead_override_seconds = max(0, int(value * 60))
+
+
+#: 整点提醒的随机浮动（分钟）。0 = 关闭。
+_due_jitter_minutes = 0
+
+
+def configure_due_jitter(minutes: float | None) -> None:
+    """让整点/半点的提醒错开几分钟，别每次都掐着 00 秒开口。
+
+    人不会正好在 15:00:00 想到要提醒你。建项时就把 due 挪几分钟，
+    注入窗口和主动提醒都跟着一起偏，全链路一致。
+    """
+    global _due_jitter_minutes
+    try:
+        value = int(float(minutes))
+    except (TypeError, ValueError):
+        _due_jitter_minutes = 0
+        return
+    _due_jitter_minutes = max(0, min(59, value))
+
+
+def jitter_due_at(due_at: str) -> str:
+    """整点/半点的 due 往后错 1~N 分钟；其他分钟不动（避免反复叠加）。"""
+    if _due_jitter_minutes <= 0:
+        return due_at
+    moment = None
+    try:
+        moment = parse_time(due_at)
+    except (TypeError, ValueError):
+        return due_at
+    if moment is None or moment.minute not in (0, 30):
+        return due_at
+    shifted = moment + timedelta(minutes=random.randint(1, _due_jitter_minutes))
+    if shifted.date() != moment.date():
+        return due_at
+    return shifted.isoformat()
 
 
 def _injection_lead_seconds(kind: str) -> int:

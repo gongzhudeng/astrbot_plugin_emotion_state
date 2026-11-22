@@ -799,6 +799,7 @@ def apply_attention_observation(
             current.time_hint = observation.time_hint or current.time_hint
             # 改时间也要过同一道校准：模型在 update 里同样会把日期算错，
             # 只在 create 校验等于留了一半的洞。
+            previous_due = current.due_at
             current.due_at = normalize_due_at(
                 jitter_due_at(
                     reconcile_due_at(
@@ -808,6 +809,12 @@ def apply_attention_observation(
                     or resolve_due_at(current.time_hint)
                 )
             )
+            # v0.3.47：时间变了，之前的提醒就作废。否则改过时间的条目会带着
+            # 旧的 notify_count 一直跳过——2026-11-22 那条 due 从 12:00 改到
+            # 15:00 后没响，就是卡在这里（已经提满 2 次）。
+            if current.due_at and current.due_at != previous_due:
+                current.notified_at = ""
+                current.notify_count = 0
             current.confidence = max(current.confidence, observation.confidence)
         elif observation.action in {"complete", "cancel", "supersede"}:
             if current.status in _TERMINAL_STATUSES:
@@ -1436,6 +1443,9 @@ def merge_attention_duplicate(
             keep_due = True
     if not keep_due:
         target.due_at = normalize_due_at(observation.due_at)
+        # 合并时改了时间，同样要让提醒重新计次
+        target.notified_at = ""
+        target.notify_count = 0
         if observation.time_hint:
             target.time_hint = str(observation.time_hint).strip()[:80]
     target.confidence = max(target.confidence, observation.confidence)

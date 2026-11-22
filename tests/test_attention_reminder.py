@@ -106,3 +106,41 @@ def test_user_mention_overrides_reminder_silence() -> None:
     item = _item(notified_at=(NOW - timedelta(minutes=5)).isoformat(), notify_count=1)
     assert not should_inject(item, NOW)
     assert should_inject(item, NOW, user_message="电动车充上了")
+
+
+def test_retime_resets_notify_count() -> None:
+    """改过时间的条目要重新计次，否则带着旧的 notify_count 永远不再提醒。
+
+    2026-11-22：due 从 12:00 改到 15:00，但计数还是 2（12:00 和 12:30 各提过一次），
+    15:00 到点直接被跳过。
+    """
+    from astrbot_plugin_emotion_state.core.attention import (
+        apply_attention_observation,
+        due_reminder_candidates,
+    )
+    from astrbot_plugin_emotion_state.core.models import AttentionObservation
+
+    ledger = StateLedger(user_key="private:retime")
+    item = _item(notify_count=2, notified_at=(NOW - timedelta(hours=3)).isoformat())
+    ledger.attention_items.append(item)
+    assert due_reminder_candidates(ledger.attention_items, NOW, max_count=2) == []
+
+    new_due = (NOW + timedelta(hours=3)).isoformat()
+    updated, ok, _ = apply_attention_observation(
+        ledger,
+        AttentionObservation(
+            action="update",
+            item_id=item.id,
+            item_version=item.version,
+            time_hint="下午",
+            due_at=new_due,
+            confidence=0.9,
+            source="attention_review",
+            evidence_quote="那就下午三点再说",
+            evidence_speaker="user",
+        ),
+    )
+    assert ok
+    after = updated.attention_items[0]
+    assert after.notify_count == 0
+    assert after.notified_at == ""

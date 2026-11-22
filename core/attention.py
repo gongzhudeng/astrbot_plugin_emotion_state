@@ -724,6 +724,18 @@ def apply_attention_observation(
     now = iso_now()
 
     if observation.action == "create" and current is None:
+        # v0.3.45：落库前判重。复核时模型看得到 open_attention 列表，
+        # 照样会把同一件事再建一条（2026-11-22 连建三条充电事项），
+        # 所以只能在这里拦：同类型 + 同一天 + 关键词撞上就合并。
+        duplicate = attention_duplicate_of(
+            updated.attention_items,
+            observation.content,
+            observation.kind,
+            observation.due_at,
+        )
+        if duplicate is not None:
+            merge_attention_duplicate(updated, duplicate, observation)
+            return updated, True, "merged_into_existing"
         item = AttentionItem(
             content=normalize_attention_content(observation.content),
             kind=observation.kind,
@@ -1100,7 +1112,32 @@ def is_mentioned(
     return False
 
 
+#: 用户配置的统一提前量（秒）。None = 用 INJECTION_LEAD_SECONDS 的分类默认。
+_lead_override_seconds: int | None = None
+
+
+def configure_injection_lead(minutes: float | None) -> None:
+    """设置统一的注入提前量。None 恢复按 kind 分类的默认值。
+
+    v0.3.45：以前 commitment 提前 2 小时、plan 提前 4 小时，中午聊天时
+    下午三点的事已经挂在上下文里了（2026-11-22 11:30 那次）。现在有了
+    到点主动提醒，注入不必再那么早——它只需要让角色在「快到了」时心里有数。
+    """
+    global _lead_override_seconds
+    if minutes is None:
+        _lead_override_seconds = None
+        return
+    try:
+        value = float(minutes)
+    except (TypeError, ValueError):
+        _lead_override_seconds = None
+        return
+    _lead_override_seconds = max(0, int(value * 60))
+
+
 def _injection_lead_seconds(kind: str) -> int:
+    if _lead_override_seconds is not None:
+        return _lead_override_seconds
     return int(INJECTION_LEAD_SECONDS.get(kind, 2 * 3600))
 
 
@@ -1249,3 +1286,113 @@ def mark_reminded(
         # 会因为「版本已过期」被拒。提醒只是内部记账，不该让别人的操作失败。
         return updated, True
     return ledger, False
+
+
+# ---------------------------------------------------------------------------
+# 重复建项（v0.3.45）
+#
+# 2026-11-22 同一件「下午给电动车充电」在三天里被建了三条（due 12:00 / 18:00 /
+# 14:00）。复核时模型**看得到 open_attention 列表**，照样建第二条——光靠提示词
+# 拦不住，只能在落库时判重。
+# ---------------------------------------------------------------------------
+
+
+def _same_due_day(left: str, right: str) -> bool:
+    """两条事项是不是落在同一天。有一方没写时间就当同一天（更倾向合并）。"""
+    if not left or not right:
+        return True
+    try:
+        return parse_time(left).date() == parse_time(right).date()
+    except (TypeError, ValueError):
+        return True
+
+
+def _shares_topic(left: str, right: str, min_len: int = 3) -> bool:
+    """两个词块是不是在说同一件事：至少要连续 3 个字重合。
+
+    不能用 `_mention_matches`——它允许 2 字片段命中，于是「电动车充电」和
+    「手机充电」会因为共用「充电」被判成同一件事。
+    """
+    left = str(left or "")
+    right = str(right or "")
+    if not left or not right:
+        return False
+    if len(left) < min_len or len(right) < min_len:
+        return left in right or right in left
+    for size in range(min(len(left), len(right)), min_len - 1, -1):
+        for index in range(len(left) - size + 1):
+            if left[index : index + size] in right:
+                return True
+    return False
+
+
+def attention_duplicate_of(
+    items: list[AttentionItem],
+    content: str,
+    kind: str,
+    due_at: str = "",
+) -> AttentionItem | None:
+    """找「同一件事」的现有未终结事项，找不到返回 None。
+
+    判据三条同时成立：同 kind、同一天、关键词撞上。
+    关键词沿用注入那套（``extract_mention_keywords`` + ``_mention_matches``），
+    所以「电动车充电」和「充电」能对上。
+    """
+    new_keys = extract_mention_keywords(content)
+    if not new_keys:
+        return None
+    for item in items:
+        if item.kind != kind:
+            continue
+        if not is_open_attention(item):
+            continue
+        if not _same_due_day(item.due_at, due_at):
+            continue
+        old_keys = extract_mention_keywords(item.content)
+        for old in old_keys:
+            for new in new_keys:
+                if _shares_topic(old, new):
+                    return item
+    return None
+
+
+def merge_attention_duplicate(
+    ledger: StateLedger,
+    target: AttentionItem,
+    observation: AttentionObservation,
+    now: datetime | None = None,
+) -> StateLedger:
+    """把新观察并进已有一条，而不是再建一条。
+
+    时间只**往后挪**：用户说「待会儿再去」是推迟，该更新；但模型把「下午」
+    填成 12 点这种手滑不能把原本对的时间改早——宁可保留原计划。
+    """
+    stamp = (now or utc_now()).isoformat()
+    try:
+        merged_due = parse_time(observation.due_at) if observation.due_at else None
+    except (TypeError, ValueError):
+        merged_due = None
+    keep_due = True
+    if merged_due is not None and target.due_at:
+        try:
+            keep_due = merged_due <= parse_time(target.due_at)
+        except (TypeError, ValueError):
+            keep_due = True
+    if not keep_due:
+        target.due_at = normalize_due_at(observation.due_at)
+        if observation.time_hint:
+            target.time_hint = str(observation.time_hint).strip()[:80]
+    target.confidence = max(target.confidence, observation.confidence)
+    target.explicit = target.explicit or observation.explicit
+    target.updated_at = stamp
+    note = observation.note or observation.content or ""
+    target.evidence.append(
+        EventTrace(
+            at=stamp,
+            kind="merged",
+            note=f"合并重复建项：{note}"[:200],
+            amount=round(observation.confidence, 3),
+            source=observation.source,
+        )
+    )
+    return ledger
